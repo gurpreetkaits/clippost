@@ -39,10 +39,12 @@ export async function downloadVideo(
 ): Promise<VideoMetadata> {
   const userDir = getUserTmpDir(userId);
 
-  // Get video info first
+  // Get video info first (using TV client to bypass bot detection)
   const { stdout: infoJson } = await execFileAsync("yt-dlp", [
     "--dump-json",
     "--no-playlist",
+    "--extractor-args",
+    "youtube:player_client=tv",
     url,
   ]);
   const info = JSON.parse(infoJson);
@@ -63,6 +65,8 @@ export async function downloadVideo(
         "-o",
         filepath,
         "--no-playlist",
+        "--extractor-args",
+        "youtube:player_client=tv",
         url,
       ],
       { timeout: 300000 }
