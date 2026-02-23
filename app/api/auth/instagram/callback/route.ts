@@ -78,6 +78,7 @@ export async function GET(request: NextRequest) {
     );
 
     const pages = pagesResponse.data.data || [];
+    console.log("Facebook Pages response:", JSON.stringify(pages, null, 2));
     let connectedCount = 0;
 
     for (const page of pages) {
@@ -87,7 +88,7 @@ export async function GET(request: NextRequest) {
 
       // Step 4: Fetch Instagram account details
       const igResponse = await axios.get(
-        `https://graph.instagram.com/v21.0/${igAccountId}`,
+        `https://graph.facebook.com/v21.0/${igAccountId}`,
         {
           params: {
             fields: "id,username,name,profile_picture_url",

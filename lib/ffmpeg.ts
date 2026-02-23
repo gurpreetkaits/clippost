@@ -57,6 +57,9 @@ export async function createClipWithCaptions(
   const outputFilename = `clip_${Date.now()}_${Math.random().toString(36).slice(2)}.mp4`;
   const outputPath = path.join(TMP_DIR, outputFilename);
 
+  // Add a white caption bar at the bottom (80px tall) below the video content
+  const padFilter = "pad=iw:ih+80:0:0:color=white";
+
   // Build drawtext filter chain for each caption segment
   const drawtextFilters = captions.map((caption) => {
     // Escape special characters for ffmpeg drawtext
@@ -73,22 +76,22 @@ export async function createClipWithCaptions(
 
     return [
       `drawtext=text='${escapedText}'`,
-      `fontsize=42`,
-      `fontcolor=white`,
+      `fontsize=36`,
+      `fontcolor=#333333`,
       `font=Arial`,
-      `box=1`,
-      `boxcolor=black@0.65`,
-      `boxborderw=15`,
       `x=(w-text_w)/2`,
-      `y=h-th-120`,
-      `enable='between(t\\,${segStart.toFixed(2)}\\,${segEnd.toFixed(2)})'`,
+      `y=h-60`,
+      `enable='between(t,${segStart.toFixed(2)},${segEnd.toFixed(2)})'`,
     ].join(":");
   });
 
   const filterComplex =
     drawtextFilters.length > 0
-      ? drawtextFilters.join(",")
+      ? [padFilter, ...drawtextFilters].join(",")
       : "null"; // no-op filter if no captions
+
+  console.log("Captions received:", JSON.stringify(captions, null, 2));
+  console.log("Filter complex:", filterComplex);
 
   await execFileAsync(
     "ffmpeg",

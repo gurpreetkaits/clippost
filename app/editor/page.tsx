@@ -78,10 +78,29 @@ function EditorContent() {
     setError("");
 
     try {
+      // Auto-transcribe if no captions exist
+      let finalCaptions = captions;
+      if (finalCaptions.length === 0) {
+        const transcribeRes = await fetch("/api/transcribe", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ filename, start, end }),
+        });
+
+        const transcribeData = await transcribeRes.json();
+
+        if (!transcribeRes.ok) {
+          throw new Error(transcribeData.error || "Transcription failed");
+        }
+
+        finalCaptions = transcribeData.segments;
+        setCaptions(finalCaptions);
+      }
+
       const response = await fetch("/api/clip", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ filename, start, end, captions }),
+        body: JSON.stringify({ filename, start, end, captions: finalCaptions }),
       });
 
       const data = await response.json();

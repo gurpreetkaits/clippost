@@ -41,13 +41,11 @@ export default function PublishButton({
     setError("");
 
     try {
-      const videoUrl = `${window.location.origin}/api/video?file=${clipFilename}`;
-
       const response = await fetch("/api/publish", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          videoUrl,
+          clipFilename,
           caption,
           accountId: selectedAccountId,
         }),
