@@ -2,8 +2,13 @@ import { NextRequest, NextResponse } from "next/server";
 import { extractAudio, cleanup } from "@/lib/ffmpeg";
 import { transcribeAudio } from "@/lib/whisper";
 import { getVideoPath } from "@/lib/youtube";
+import { requireAuth } from "@/lib/auth";
 
 export async function POST(request: NextRequest) {
+  const authResult = await requireAuth();
+  if (authResult instanceof NextResponse) return authResult;
+  const { userId } = authResult;
+
   let audioPath: string | null = null;
 
   try {
@@ -23,8 +28,8 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const videoPath = getVideoPath(filename);
-    audioPath = await extractAudio(videoPath, start, end);
+    const videoPath = getVideoPath(userId, filename);
+    audioPath = await extractAudio(userId, videoPath, start, end);
 
     const segments = await transcribeAudio(audioPath);
 

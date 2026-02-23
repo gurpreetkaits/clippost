@@ -1,6 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
+import { requireAuth } from "@/lib/auth";
 
 export async function GET(request: NextRequest) {
+  const authResult = await requireAuth();
+  if (authResult instanceof NextResponse) {
+    // Not logged in — redirect to login
+    const host = request.headers.get("host") || "localhost:3456";
+    const protocol = host.startsWith("localhost") ? "http" : "https";
+    return NextResponse.redirect(`${protocol}://${host}/login`);
+  }
+
   const appId = process.env.FACEBOOK_APP_ID;
   if (!appId) {
     return NextResponse.json(

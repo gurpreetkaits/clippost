@@ -7,10 +7,13 @@ const execFileAsync = promisify(execFile);
 
 const TMP_DIR = path.join(process.cwd(), "tmp");
 
-function ensureTmpDir() {
-  if (!fs.existsSync(TMP_DIR)) {
-    fs.mkdirSync(TMP_DIR, { recursive: true });
+function getUserTmpDir(userId: string): string {
+  const safeId = userId.replace(/[^a-zA-Z0-9_-]/g, "_");
+  const dir = path.join(TMP_DIR, safeId);
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
   }
+  return dir;
 }
 
 export function isValidYouTubeUrl(url: string): boolean {
@@ -30,8 +33,11 @@ export interface VideoMetadata {
   filepath: string;
 }
 
-export async function downloadVideo(url: string): Promise<VideoMetadata> {
-  ensureTmpDir();
+export async function downloadVideo(
+  userId: string,
+  url: string
+): Promise<VideoMetadata> {
+  const userDir = getUserTmpDir(userId);
 
   // Get video info first
   const { stdout: infoJson } = await execFileAsync("yt-dlp", [
@@ -43,7 +49,7 @@ export async function downloadVideo(url: string): Promise<VideoMetadata> {
 
   const videoId = info.id;
   const filename = `${videoId}.mp4`;
-  const filepath = path.join(TMP_DIR, filename);
+  const filepath = path.join(userDir, filename);
 
   // Download if not already cached
   if (!fs.existsSync(filepath)) {
@@ -72,12 +78,19 @@ export async function downloadVideo(url: string): Promise<VideoMetadata> {
   };
 }
 
-export function getVideoPath(filename: string): string {
-  return path.join(TMP_DIR, filename);
+export function getVideoPath(userId: string, filename: string): string {
+  const userDir = getUserTmpDir(userId);
+  const safeName = path.basename(filename);
+  const resolved = path.join(userDir, safeName);
+  // Verify the file is within the user's directory
+  if (!resolved.startsWith(userDir)) {
+    throw new Error("Invalid file path");
+  }
+  return resolved;
 }
 
-export function cleanupVideo(filename: string) {
-  const filepath = path.join(TMP_DIR, filename);
+export function cleanupVideo(userId: string, filename: string) {
+  const filepath = getVideoPath(userId, filename);
   if (fs.existsSync(filepath)) {
     fs.unlinkSync(filepath);
   }

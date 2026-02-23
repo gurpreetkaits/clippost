@@ -1,7 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { downloadVideo, isValidYouTubeUrl } from "@/lib/youtube";
+import { requireAuth } from "@/lib/auth";
 
 export async function POST(request: NextRequest) {
+  const authResult = await requireAuth();
+  if (authResult instanceof NextResponse) return authResult;
+  const { userId } = authResult;
+
   try {
     const { url } = await request.json();
 
@@ -12,7 +17,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const metadata = await downloadVideo(url);
+    const metadata = await downloadVideo(userId, url);
 
     return NextResponse.json({
       id: metadata.id,

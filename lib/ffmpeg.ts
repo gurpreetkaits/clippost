@@ -7,6 +7,15 @@ const execFileAsync = promisify(execFile);
 
 const TMP_DIR = path.join(process.cwd(), "tmp");
 
+function getUserTmpDir(userId: string): string {
+  const safeId = userId.replace(/[^a-zA-Z0-9_-]/g, "_");
+  const dir = path.join(TMP_DIR, safeId);
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+  return dir;
+}
+
 export interface CaptionSegment {
   start: number;
   end: number;
@@ -14,12 +23,14 @@ export interface CaptionSegment {
 }
 
 export async function extractAudio(
+  userId: string,
   videoPath: string,
   start: number,
   end: number
 ): Promise<string> {
+  const userDir = getUserTmpDir(userId);
   const outputPath = path.join(
-    TMP_DIR,
+    userDir,
     `audio_${Date.now()}_${Math.random().toString(36).slice(2)}.mp3`
   );
 
@@ -49,13 +60,15 @@ export async function extractAudio(
 }
 
 export async function createClipWithCaptions(
+  userId: string,
   videoPath: string,
   start: number,
   end: number,
   captions: CaptionSegment[]
 ): Promise<string> {
+  const userDir = getUserTmpDir(userId);
   const outputFilename = `clip_${Date.now()}_${Math.random().toString(36).slice(2)}.mp4`;
-  const outputPath = path.join(TMP_DIR, outputFilename);
+  const outputPath = path.join(userDir, outputFilename);
 
   // Add a white caption bar at the bottom (80px tall) below the video content
   const padFilter = "pad=iw:ih+80:0:0:color=white";

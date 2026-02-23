@@ -6,6 +6,7 @@ import {
 } from "@/lib/instagram";
 import { getAccountById, refreshTokenIfNeeded } from "@/lib/accounts";
 import { getVideoPath } from "@/lib/youtube";
+import { requireAuth } from "@/lib/auth";
 import fs from "fs";
 import path from "path";
 import axios from "axios";
@@ -28,6 +29,10 @@ async function uploadToTmpFiles(filePath: string): Promise<string> {
 }
 
 export async function POST(request: NextRequest) {
+  const authResult = await requireAuth();
+  if (authResult instanceof NextResponse) return authResult;
+  const { userId } = authResult;
+
   try {
     const { clipFilename, caption, accountId } = await request.json();
 
@@ -45,7 +50,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const account = getAccountById(accountId);
+    const account = getAccountById(userId, accountId);
     if (!account) {
       return NextResponse.json(
         { error: "Account not found" },
@@ -53,14 +58,15 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const refreshedAccount = await refreshTokenIfNeeded(account);
+    const refreshedAccount = await refreshTokenIfNeeded(userId, account);
     const credentials = {
       accessToken: refreshedAccount.accessToken,
       accountId: refreshedAccount.id,
     };
 
     // Step 1: Upload clip to temporary public hosting
-    const clipPath = path.join(process.cwd(), "tmp", clipFilename);
+    const safeUserId = userId.replace(/[^a-zA-Z0-9_-]/g, "_");
+    const clipPath = path.join(process.cwd(), "tmp", safeUserId, path.basename(clipFilename));
     if (!fs.existsSync(clipPath)) {
       return NextResponse.json(
         { error: "Clip file not found" },

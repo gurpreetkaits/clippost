@@ -1,8 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClipWithCaptions, CaptionSegment } from "@/lib/ffmpeg";
 import { getVideoPath } from "@/lib/youtube";
+import { requireAuth } from "@/lib/auth";
 
 export async function POST(request: NextRequest) {
+  const authResult = await requireAuth();
+  if (authResult instanceof NextResponse) return authResult;
+  const { userId } = authResult;
+
   try {
     const {
       filename,
@@ -30,8 +35,9 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const videoPath = getVideoPath(filename);
+    const videoPath = getVideoPath(userId, filename);
     const clipFilename = await createClipWithCaptions(
+      userId,
       videoPath,
       start,
       end,

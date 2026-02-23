@@ -1,8 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
 import axios from "axios";
 import { upsertAccount } from "@/lib/accounts";
+import { requireAuth } from "@/lib/auth";
 
 export async function GET(request: NextRequest) {
+  const authResult = await requireAuth();
+  if (authResult instanceof NextResponse) {
+    // Not logged in — redirect to login
+    const host = request.headers.get("host") || "localhost:3456";
+    const protocol = host.startsWith("localhost") ? "http" : "https";
+    return NextResponse.redirect(`${protocol}://${host}/login`);
+  }
+  const { userId } = authResult;
+
   const code = request.nextUrl.searchParams.get("code");
   const errorParam = request.nextUrl.searchParams.get("error");
 
@@ -99,7 +109,7 @@ export async function GET(request: NextRequest) {
 
       const igData = igResponse.data;
 
-      upsertAccount({
+      upsertAccount(userId, {
         id: igData.id,
         username: igData.username || "",
         name: igData.name || igData.username || "",
