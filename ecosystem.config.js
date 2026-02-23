@@ -1,8 +1,8 @@
 module.exports = {
   apps: [{
     name: 'clippost',
-    script: 'npm',
-    args: 'start',
+    script: 'node_modules/.bin/next',
+    args: 'start -p 3001',
     cwd: '/var/www/html/clippost',
     env: {
       NODE_ENV: 'production',
