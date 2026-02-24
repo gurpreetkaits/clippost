@@ -1,6 +1,9 @@
 import { auth } from "@/auth";
 import { NextResponse } from "next/server";
 
+// Use Node.js runtime instead of Edge to support Prisma
+export const runtime = "nodejs";
+
 const isLocalhost = process.env.NODE_ENV === "development";
 
 // Routes that require authentication — all others are public
