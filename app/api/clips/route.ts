@@ -9,9 +9,22 @@ export async function GET(request: NextRequest) {
 
   const limitParam = request.nextUrl.searchParams.get("limit");
   const take = limitParam ? Math.min(parseInt(limitParam, 10) || 50, 100) : 50;
+  const videoFilename = request.nextUrl.searchParams.get("videoFilename");
+
+  // If videoFilename provided, filter clips by that video's youtubeId
+  const videoFilter: Record<string, unknown> = {};
+  if (videoFilename) {
+    const youtubeId = videoFilename.replace(/\.mp4$/, "");
+    const video = await prisma.video.findFirst({ where: { userId, youtubeId } });
+    if (video) {
+      videoFilter.videoId = video.id;
+    } else {
+      return NextResponse.json({ clips: [] });
+    }
+  }
 
   const clips = await prisma.clip.findMany({
-    where: { userId },
+    where: { userId, ...videoFilter },
     include: {
       video: {
         select: {

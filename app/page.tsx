@@ -8,7 +8,7 @@ import Link from "next/link";
 import dynamic from "next/dynamic";
 import ClipSelector from "@/components/ClipSelector";
 import CaptionEditor from "@/components/CaptionEditor";
-import CaptionPreview from "@/components/CaptionPreview";
+
 import CaptionStyleEditor from "@/components/CaptionStyleEditor";
 import PublishButton from "@/components/PublishButton";
 import DemoVideo from "@/components/DemoVideo";
@@ -35,6 +35,7 @@ import {
   Instagram,
   Sparkles,
   Film,
+  ChevronDown,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { CaptionStyle, DEFAULT_CAPTION_STYLE } from "@/lib/caption-style";
@@ -506,14 +507,46 @@ function HomeContent() {
 
   const isAutoTrimReady = !autoTrim || purpose.trim().length > 0;
 
+  // Fetch existing clips for this video
+  const [videoClips, setVideoClips] = useState<ClipItem[]>([]);
+  const [loadingVideoClips, setLoadingVideoClips] = useState(false);
+  const [showPreviousClips, setShowPreviousClips] = useState(false);
+  const generatedClipRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!videoData || !isAuthenticated) {
+      setVideoClips([]);
+      return;
+    }
+    setLoadingVideoClips(true);
+    fetch(`/api/clips?videoFilename=${encodeURIComponent(videoData.filename)}&limit=10`)
+      .then((r) => r.json())
+      .then((data) => setVideoClips(data.clips || []))
+      .catch(() => {})
+      .finally(() => setLoadingVideoClips(false));
+  }, [videoData, isAuthenticated, clipFilename]);
+
+  // Auto-scroll to generated clip when ready
+  useEffect(() => {
+    if (clipFilename && generatedClipRef.current) {
+      generatedClipRef.current.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+  }, [clipFilename]);
+
   // ─── Inline Editor View ───
   if (videoData) {
     const videoUrl = `/api/video?file=${videoData.filename}`;
     const clipUrl = clipFilename ? `/api/video?file=${clipFilename}` : null;
 
+    // Caption preview style computation
+    const previewBgAlpha = Math.round((captionStyle.bgOpacity / 100) * 255)
+      .toString(16)
+      .padStart(2, "0");
+    const previewText = captions[0]?.text || "Your caption will appear here";
+
     return (
-      <div className="min-h-screen p-4 md:p-8">
-        <div className="max-w-3xl mx-auto space-y-6">
+      <div className="min-h-screen p-4 md:p-6">
+        <div className="max-w-7xl mx-auto space-y-4">
           {/* Header */}
           <div className="flex items-center gap-3">
             <Button
@@ -530,138 +563,255 @@ function HomeContent() {
             </h1>
           </div>
 
-          {/* Main Video with caption overlay */}
-          <div className="relative">
-            <VideoPlayer
-              url={videoUrl}
-              start={start}
-              end={end}
-              playing={playing}
-              onProgress={setCurrentTime}
-            />
-            <CaptionPreview captions={captions} currentTime={currentTime} style={captionStyle} />
-          </div>
-
-          {/* Clip Range */}
-          <ClipSelector
-            duration={videoData.duration}
-            start={start}
-            end={end}
-            currentTime={currentTime}
-            onStartChange={setStart}
-            onEndChange={setEnd}
-          />
-
-          {/* Play + Transcribe */}
-          <div className="flex gap-2">
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={() => setPlaying(!playing)}
-            >
-              {playing ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
-              {playing ? "Pause" : "Play Clip"}
-            </Button>
-            <AuthGate
-              fallback={
-                <Button size="sm" variant="outline" onClick={() => signIn("google")}>
-                  <Lock className="h-4 w-4 mr-1" />
-                  Sign in to transcribe
-                </Button>
-              }
-            >
-              <Button
-                size="sm"
-                onClick={handleTranscribe}
-                disabled={transcribing || end - start > 90}
+          {/* Existing clips banner - full width above the editor */}
+          {videoClips.length > 0 && (
+            <div className="rounded-lg border bg-muted/50 overflow-hidden">
+              <button
+                type="button"
+                onClick={() => setShowPreviousClips(!showPreviousClips)}
+                className="flex items-center justify-between w-full p-3 text-left hover:bg-muted/80 transition-colors"
               >
-                {transcribing ? (
-                  <>
-                    <Loader2 className="animate-spin" />
-                    Transcribing...
-                  </>
-                ) : (
-                  "Transcribe"
-                )}
-              </Button>
-            </AuthGate>
-          </div>
-
-          <div className="border-t border-border" />
-
-          {/* Captions + Style */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-sm">Captions</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <CaptionEditor captions={captions} onUpdate={setCaptions} />
-              </CardContent>
-            </Card>
-            <CaptionStyleEditor style={captionStyle} onChange={setCaptionStyle} />
-          </div>
-
-          {/* Generate Clip */}
-          <AuthGate>
-            <Button
-              onClick={handleGenerateClip}
-              disabled={generating || end - start > 90}
-              className="w-full bg-green-600 hover:bg-green-700 text-white"
-              size="lg"
-            >
-              {generating ? (
-                <>
-                  <Loader2 className="animate-spin" />
-                  Generating Clip...
-                </>
-              ) : (
-                "Generate Final Clip"
+                <div className="flex items-center gap-2">
+                  <Film className="h-4 w-4 text-muted-foreground" />
+                  <span className="text-sm font-medium">
+                    You have {videoClips.length} clip{videoClips.length !== 1 ? "s" : ""} from this video
+                  </span>
+                </div>
+                <ChevronDown className={`h-4 w-4 text-muted-foreground transition-transform ${showPreviousClips ? "rotate-180" : ""}`} />
+              </button>
+              {showPreviousClips && (
+                <div className="px-3 pb-3">
+                  {loadingVideoClips ? (
+                    <div className="flex justify-center py-4">
+                      <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                      {videoClips.map((clip) => (
+                        <Card key={clip.id} className="overflow-hidden">
+                          <CardContent className="p-3 space-y-2">
+                            <video
+                              src={`/api/video?file=${encodeURIComponent(clip.filename)}`}
+                              controls
+                              className="w-full rounded bg-black aspect-video"
+                            />
+                            <div className="flex items-center justify-between text-xs text-muted-foreground">
+                              <span>{formatTimestamp(clip.startTime)} - {formatTimestamp(clip.endTime)}</span>
+                              <span>{new Date(clip.createdAt).toLocaleDateString()}</span>
+                            </div>
+                            <div className="flex gap-2">
+                              <a href={`/api/video?file=${encodeURIComponent(clip.filename)}`} download className="flex-1">
+                                <Button variant="outline" size="sm" className="w-full">
+                                  <Download className="h-3 w-3 mr-1" /> Download
+                                </Button>
+                              </a>
+                              <div className="flex-1">
+                                <PublishButton clipFilename={clip.filename} videoTitle={videoData.title} clipDuration={clip.duration} />
+                              </div>
+                            </div>
+                          </CardContent>
+                        </Card>
+                      ))}
+                    </div>
+                  )}
+                </div>
               )}
-            </Button>
-          </AuthGate>
-
-          {error && (
-            <Alert variant="destructive">
-              <AlertCircle className="h-4 w-4" />
-              <AlertDescription>{error}</AlertDescription>
-            </Alert>
+            </div>
           )}
 
-          {/* Generated Clip */}
-          {clipUrl && (
-            <>
-              <div className="border-t border-border" />
+          {/* ═══ Two-column editor layout ═══ */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
 
-              <div className="space-y-4">
-                <h2 className="text-sm font-semibold text-foreground">Generated Clip</h2>
-                <video
-                  src={clipUrl}
-                  controls
-                  className="w-full rounded-lg bg-black"
+            {/* ─── LEFT: Videos (sticky on desktop) ─── */}
+            <div className="lg:sticky lg:top-4 lg:self-start space-y-4">
+              {/* Original Video */}
+              <div className="space-y-2">
+                <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Original</p>
+                <VideoPlayer
+                  url={videoUrl}
+                  start={start}
+                  end={end}
+                  playing={playing}
+                  onProgress={setCurrentTime}
+                />
+              </div>
+
+              {/* Generated Clip (or placeholder) */}
+              <div className="space-y-2" ref={generatedClipRef}>
+                <div className="flex items-center gap-2">
+                  <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Generated Clip</p>
+                  {clipUrl && <CheckCircle2 className="h-3.5 w-3.5 text-green-500" />}
+                </div>
+                {clipUrl ? (
+                  <>
+                    <video
+                      src={clipUrl}
+                      controls
+                      className="w-full rounded-lg bg-black"
+                    />
+                    <div className="flex gap-2">
+                      <a
+                        href={clipUrl}
+                        download={`clip_${videoData.filename}`}
+                        className="flex-1"
+                      >
+                        <Button variant="outline" size="sm" className="w-full">
+                          <Download className="h-4 w-4 mr-1" />
+                          Download
+                        </Button>
+                      </a>
+                      <div className="flex-1">
+                        <PublishButton
+                          clipFilename={clipFilename!}
+                          videoTitle={videoData.title}
+                          clipDuration={end - start}
+                        />
+                      </div>
+                    </div>
+                  </>
+                ) : (
+                  <div className="aspect-video rounded-lg border-2 border-dashed border-muted-foreground/20 flex flex-col items-center justify-center bg-muted/30 gap-2">
+                    <Film className="h-8 w-8 text-muted-foreground/30" />
+                    <p className="text-sm text-muted-foreground/50">
+                      {generating ? "Generating..." : "Your clip will appear here"}
+                    </p>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* ─── RIGHT: Controls (scrollable) ─── */}
+            <div className="space-y-5">
+
+              {/* Step 1: Select Range */}
+              <div className="space-y-3">
+                <div className="flex items-center gap-2">
+                  <span className="flex items-center justify-center w-6 h-6 rounded-full bg-primary text-primary-foreground text-xs font-bold shrink-0">1</span>
+                  <span className="text-sm font-semibold text-foreground">Select Range</span>
+                </div>
+                <ClipSelector
+                  duration={videoData.duration}
+                  start={start}
+                  end={end}
+                  currentTime={currentTime}
+                  onStartChange={setStart}
+                  onEndChange={setEnd}
                 />
                 <div className="flex gap-2">
-                  <a
-                    href={clipUrl}
-                    download={`clip_${videoData.filename}`}
-                    className="flex-1"
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => setPlaying(!playing)}
                   >
-                    <Button variant="outline" className="w-full">
-                      <Download className="h-4 w-4 mr-2" />
-                      Download
+                    {playing ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
+                    {playing ? "Pause" : "Play Clip"}
+                  </Button>
+                  <AuthGate
+                    fallback={
+                      <Button size="sm" variant="outline" onClick={() => signIn("google")}>
+                        <Lock className="h-4 w-4 mr-1" />
+                        Sign in to transcribe
+                      </Button>
+                    }
+                  >
+                    <Button
+                      size="sm"
+                      onClick={handleTranscribe}
+                      disabled={transcribing || end - start > 90}
+                    >
+                      {transcribing ? (
+                        <>
+                          <Loader2 className="animate-spin" />
+                          Transcribing...
+                        </>
+                      ) : (
+                        "Transcribe"
+                      )}
                     </Button>
-                  </a>
-                  <div className="flex-1">
-                    <PublishButton
-                      clipFilename={clipFilename!}
-                      videoTitle={videoData.title}
-                      clipDuration={end - start}
-                    />
+                  </AuthGate>
+                </div>
+              </div>
+
+              <div className="border-t border-border" />
+
+              {/* Step 2: Captions & Style */}
+              <div className="space-y-3">
+                <div className="flex items-center gap-2">
+                  <span className="flex items-center justify-center w-6 h-6 rounded-full bg-primary text-primary-foreground text-xs font-bold shrink-0">2</span>
+                  <span className="text-sm font-semibold text-foreground">Captions & Style</span>
+                </div>
+
+                {/* Captions */}
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-sm">Captions</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <CaptionEditor captions={captions} onUpdate={setCaptions} />
+                  </CardContent>
+                </Card>
+
+                {/* Style */}
+                <CaptionStyleEditor style={captionStyle} onChange={setCaptionStyle} />
+
+                {/* Live Caption Preview */}
+                <div className="rounded-lg border overflow-hidden">
+                  <p className="text-xs font-medium text-muted-foreground px-4 pt-3 pb-2">Preview</p>
+                  <div className="flex justify-center px-4 pb-4">
+                    <div className="w-full rounded-lg bg-neutral-900 flex justify-center p-6">
+                      <span
+                        className="rounded-md text-center leading-relaxed"
+                        style={{
+                          fontFamily: captionStyle.fontFamily,
+                          fontSize: `${Math.min(captionStyle.fontSize * 0.5, 28)}px`,
+                          color: captionStyle.textColor,
+                          backgroundColor: `${captionStyle.bgColor}${previewBgAlpha}`,
+                          fontWeight: captionStyle.bold ? "bold" : "normal",
+                          fontStyle: captionStyle.italic ? "italic" : "normal",
+                          padding: "6px 14px",
+                        }}
+                      >
+                        {previewText}
+                      </span>
+                    </div>
                   </div>
                 </div>
               </div>
-            </>
-          )}
+
+              <div className="border-t border-border" />
+
+              {/* Step 3: Generate */}
+              <div className="space-y-3">
+                <div className="flex items-center gap-2">
+                  <span className="flex items-center justify-center w-6 h-6 rounded-full bg-primary text-primary-foreground text-xs font-bold shrink-0">3</span>
+                  <span className="text-sm font-semibold text-foreground">Generate</span>
+                </div>
+                <AuthGate>
+                  <Button
+                    onClick={handleGenerateClip}
+                    disabled={generating || end - start > 90}
+                    className="w-full bg-green-600 hover:bg-green-700 text-white"
+                    size="lg"
+                  >
+                    {generating ? (
+                      <>
+                        <Loader2 className="animate-spin" />
+                        Generating Clip...
+                      </>
+                    ) : (
+                      "Generate Final Clip"
+                    )}
+                  </Button>
+                </AuthGate>
+                {error && (
+                  <Alert variant="destructive">
+                    <AlertCircle className="h-4 w-4" />
+                    <AlertDescription>{error}</AlertDescription>
+                  </Alert>
+                )}
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     );
