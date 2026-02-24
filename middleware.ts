@@ -1,9 +1,12 @@
 import { auth } from "@/auth";
 import { NextResponse } from "next/server";
 
+const isLocalhost = process.env.NODE_ENV === "development";
+
 export default auth((req) => {
-  // Only NextAuth routes (/api/auth/signin, /api/auth/callback, etc.) are public.
-  // Instagram OAuth routes have their own auth checks inside.
+  // Skip all auth on localhost
+  if (isLocalhost) return;
+
   const isNextAuthRoute =
     req.nextUrl.pathname.startsWith("/api/auth/") &&
     !req.nextUrl.pathname.startsWith("/api/auth/instagram");

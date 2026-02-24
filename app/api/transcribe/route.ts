@@ -33,11 +33,16 @@ export async function POST(request: NextRequest) {
 
     const segments = await transcribeAudio(audioPath);
 
-    // Offset timestamps relative to clip start
+    // Offset timestamps relative to clip start (including word-level)
     const offsetSegments = segments.map((seg) => ({
+      ...seg,
       start: seg.start + start,
       end: seg.end + start,
-      text: seg.text,
+      words: seg.words?.map((w) => ({
+        ...w,
+        start: w.start + start,
+        end: w.end + start,
+      })),
     }));
 
     return NextResponse.json({ segments: offsetSegments });

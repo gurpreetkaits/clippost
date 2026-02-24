@@ -16,10 +16,118 @@ function getUserTmpDir(userId: string): string {
   return dir;
 }
 
+export interface CaptionWord {
+  word: string;
+  start: number;
+  end: number;
+}
+
 export interface CaptionSegment {
   start: number;
   end: number;
   text: string;
+  words?: CaptionWord[];
+}
+
+// ASS time format: H:MM:SS.CC (centiseconds)
+function formatAssTime(seconds: number): string {
+  const clamped = Math.max(0, seconds);
+  const h = Math.floor(clamped / 3600);
+  const m = Math.floor((clamped % 3600) / 60);
+  const s = clamped % 60;
+  const sWhole = Math.floor(s);
+  const cs = Math.round((s - sWhole) * 100);
+  return `${h}:${String(m).padStart(2, "0")}:${String(sWhole).padStart(2, "0")}.${String(cs).padStart(2, "0")}`;
+}
+
+function escapeAssText(text: string): string {
+  return text
+    .replace(/\\/g, "\\\\")
+    .replace(/\{/g, "\\{")
+    .replace(/\}/g, "\\}");
+}
+
+async function getVideoDimensions(
+  videoPath: string
+): Promise<{ width: number; height: number }> {
+  const { stdout } = await execFileAsync("ffprobe", [
+    "-v",
+    "error",
+    "-select_streams",
+    "v:0",
+    "-show_entries",
+    "stream=width,height",
+    "-of",
+    "json",
+    videoPath,
+  ]);
+  const data = JSON.parse(stdout);
+  return {
+    width: data.streams[0].width,
+    height: data.streams[0].height,
+  };
+}
+
+function generateAssContent(
+  captions: CaptionSegment[],
+  clipStart: number,
+  width: number,
+  height: number
+): string {
+  const fontSize = Math.round(height * 0.033);
+  const boxPad = Math.round(fontSize * 0.5);
+  const marginV = Math.round(height * 0.06);
+  const marginLR = Math.round(width * 0.05);
+
+  // PrimaryColour = black (spoken), SecondaryColour = gray (unspoken)
+  // BorderStyle=3 = opaque box, OutlineColour = white box background
+  // Alignment=2 = bottom center
+  const lines: string[] = [
+    "[Script Info]",
+    "ScriptType: v4.00+",
+    `PlayResX: ${width}`,
+    `PlayResY: ${height}`,
+    "WrapStyle: 0",
+    "",
+    "[V4+ Styles]",
+    "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
+    `Style: Default,Helvetica Neue,${fontSize},&H00000000,&H00AAAAAA,&H00FFFFFF,&H00000000,1,0,0,0,100,100,0,0,3,${boxPad},0,2,${marginLR},${marginLR},${marginV},1`,
+    "",
+    "[Events]",
+    "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
+  ];
+
+  for (const caption of captions) {
+    const relStart = Math.max(0, caption.start - clipStart);
+    const relEnd = Math.max(0, caption.end - clipStart);
+    const startStr = formatAssTime(relStart);
+    const endStr = formatAssTime(relEnd);
+
+    if (caption.words && caption.words.length > 0) {
+      // Karaoke mode: words turn black one by one
+      let text = "";
+      let prevTime = caption.start;
+
+      for (let i = 0; i < caption.words.length; i++) {
+        const word = caption.words[i];
+        const kCs = Math.max(0, Math.round((word.start - prevTime) * 100));
+        text += `{\\k${kCs}}${escapeAssText(word.word)}`;
+        if (i < caption.words.length - 1) text += " ";
+        prevTime = word.start;
+      }
+
+      lines.push(
+        `Dialogue: 0,${startStr},${endStr},Default,,0,0,0,,${text}`
+      );
+    } else {
+      // Simple text fallback (no word-level timing)
+      lines.push(
+        `Dialogue: 0,${startStr},${endStr},Default,,0,0,0,,${escapeAssText(caption.text)}`
+      );
+    }
+  }
+
+  return lines.join("\n");
 }
 
 export async function extractAudio(
@@ -34,16 +142,18 @@ export async function extractAudio(
     `audio_${Date.now()}_${Math.random().toString(36).slice(2)}.mp3`
   );
 
+  const duration = end - start;
+
   await execFileAsync(
     "ffmpeg",
     [
       "-y",
-      "-i",
-      videoPath,
       "-ss",
       start.toString(),
-      "-to",
-      end.toString(),
+      "-i",
+      videoPath,
+      "-t",
+      duration.toString(),
       "-vn",
       "-acodec",
       "libmp3lame",
@@ -69,71 +179,59 @@ export async function createClipWithCaptions(
   const userDir = getUserTmpDir(userId);
   const outputFilename = `clip_${Date.now()}_${Math.random().toString(36).slice(2)}.mp4`;
   const outputPath = path.join(userDir, outputFilename);
+  const duration = end - start;
 
-  // Add a white caption bar at the bottom (80px tall) below the video content
-  const padFilter = "pad=iw:ih+80:0:0:color=white";
+  // Get video dimensions for ASS scaling
+  const { width, height } = await getVideoDimensions(videoPath);
 
-  // Build drawtext filter chain for each caption segment
-  const drawtextFilters = captions.map((caption) => {
-    // Escape special characters for ffmpeg drawtext
-    const escapedText = caption.text
-      .replace(/\\/g, "\\\\\\\\")
-      .replace(/'/g, "\u2019")
-      .replace(/"/g, '\\"')
-      .replace(/:/g, "\\:")
-      .replace(/;/g, "\\;")
-      .replace(/%/g, "%%");
-
-    const segStart = caption.start - start;
-    const segEnd = caption.end - start;
-
-    return [
-      `drawtext=text='${escapedText}'`,
-      `fontsize=36`,
-      `fontcolor=#333333`,
-      `font=Arial`,
-      `x=(w-text_w)/2`,
-      `y=h-60`,
-      `enable='between(t,${segStart.toFixed(2)},${segEnd.toFixed(2)})'`,
-    ].join(":");
-  });
-
-  const filterComplex =
-    drawtextFilters.length > 0
-      ? [padFilter, ...drawtextFilters].join(",")
-      : "null"; // no-op filter if no captions
-
-  console.log("Captions received:", JSON.stringify(captions, null, 2));
-  console.log("Filter complex:", filterComplex);
-
-  await execFileAsync(
-    "ffmpeg",
-    [
-      "-y",
-      "-i",
-      videoPath,
-      "-ss",
-      start.toString(),
-      "-to",
-      end.toString(),
-      "-vf",
-      filterComplex,
-      "-c:v",
-      "libx264",
-      "-preset",
-      "fast",
-      "-crf",
-      "23",
-      "-c:a",
-      "aac",
-      "-b:a",
-      "128k",
-      "-movflags",
-      "+faststart",
-      outputPath,
-    ],
-    { timeout: 300000 }
+  // Generate ASS subtitle file
+  const assContent = generateAssContent(captions, start, width, height);
+  const assPath = path.join(
+    userDir,
+    `subs_${Date.now()}_${Math.random().toString(36).slice(2)}.ass`
   );
+  fs.writeFileSync(assPath, assContent);
+
+  console.log("ASS content:\n", assContent);
+
+  // Escape the ASS path for ffmpeg filter syntax (colons, backslashes)
+  const escapedAssPath = assPath
+    .replace(/\\/g, "\\\\")
+    .replace(/:/g, "\\:");
+
+  try {
+    await execFileAsync(
+      "ffmpeg",
+      [
+        "-y",
+        "-ss",
+        start.toString(),
+        "-i",
+        videoPath,
+        "-t",
+        duration.toString(),
+        "-vf",
+        `ass=${escapedAssPath}`,
+        "-c:v",
+        "libx264",
+        "-preset",
+        "fast",
+        "-crf",
+        "23",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "128k",
+        "-movflags",
+        "+faststart",
+        outputPath,
+      ],
+      { timeout: 300000 }
+    );
+  } finally {
+    // Clean up temp ASS file
+    if (fs.existsSync(assPath)) fs.unlinkSync(assPath);
+  }
 
   return outputFilename;
 }

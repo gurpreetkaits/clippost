@@ -23,7 +23,7 @@ export default function CaptionEditor({
 }: CaptionEditorProps) {
   const handleTextChange = (index: number, text: string) => {
     const updated = [...captions];
-    updated[index] = { ...updated[index], text };
+    updated[index] = { ...updated[index], text, words: undefined };
     onUpdate(updated);
   };
 

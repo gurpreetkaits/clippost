@@ -5,6 +5,33 @@ import { requireAuth } from "@/lib/auth";
 
 const TMP_DIR = path.join(process.cwd(), "tmp");
 
+function nodeStreamToWeb(stream: fs.ReadStream): ReadableStream {
+  let closed = false;
+  return new ReadableStream({
+    start(controller) {
+      stream.on("data", (chunk) => {
+        if (!closed) controller.enqueue(chunk);
+      });
+      stream.on("end", () => {
+        if (!closed) {
+          closed = true;
+          controller.close();
+        }
+      });
+      stream.on("error", (err) => {
+        if (!closed) {
+          closed = true;
+          controller.error(err);
+        }
+      });
+    },
+    cancel() {
+      closed = true;
+      stream.destroy();
+    },
+  });
+}
+
 export async function GET(request: NextRequest) {
   const authResult = await requireAuth();
   if (authResult instanceof NextResponse) return authResult;
@@ -42,15 +69,8 @@ export async function GET(request: NextRequest) {
       const chunkSize = end - start + 1;
 
       const stream = fs.createReadStream(filepath, { start, end });
-      const readable = new ReadableStream({
-        start(controller) {
-          stream.on("data", (chunk) => controller.enqueue(chunk));
-          stream.on("end", () => controller.close());
-          stream.on("error", (err) => controller.error(err));
-        },
-      });
 
-      return new Response(readable, {
+      return new Response(nodeStreamToWeb(stream), {
         status: 206,
         headers: {
           "Content-Range": `bytes ${start}-${end}/${stat.size}`,
@@ -63,15 +83,8 @@ export async function GET(request: NextRequest) {
   }
 
   const stream = fs.createReadStream(filepath);
-  const readable = new ReadableStream({
-    start(controller) {
-      stream.on("data", (chunk) => controller.enqueue(chunk));
-      stream.on("end", () => controller.close());
-      stream.on("error", (err) => controller.error(err));
-    },
-  });
 
-  return new Response(readable, {
+  return new Response(nodeStreamToWeb(stream), {
     headers: {
       "Content-Length": stat.size.toString(),
       "Content-Type": "video/mp4",

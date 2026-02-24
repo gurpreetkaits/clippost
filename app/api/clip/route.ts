@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClipWithCaptions, CaptionSegment } from "@/lib/ffmpeg";
 import { getVideoPath } from "@/lib/youtube";
 import { requireAuth } from "@/lib/auth";
+import { splitLongSegments } from "@/lib/whisper";
 
 export async function POST(request: NextRequest) {
   const authResult = await requireAuth();
@@ -36,12 +37,13 @@ export async function POST(request: NextRequest) {
     }
 
     const videoPath = getVideoPath(userId, filename);
+    const shortCaptions = splitLongSegments(captions || []);
     const clipFilename = await createClipWithCaptions(
       userId,
       videoPath,
       start,
       end,
-      captions || []
+      shortCaptions
     );
 
     return NextResponse.json({ clipFilename });
