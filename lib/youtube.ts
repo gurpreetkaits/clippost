@@ -6,6 +6,14 @@ import fs from "fs";
 const execFileAsync = promisify(execFile);
 
 const TMP_DIR = path.join(process.cwd(), "tmp");
+const COOKIES_PATH = path.join(process.cwd(), "cookies.txt");
+
+function getCookiesArgs(): string[] {
+  if (fs.existsSync(COOKIES_PATH)) {
+    return ["--cookies", COOKIES_PATH];
+  }
+  return [];
+}
 
 function getUserTmpDir(userId: string): string {
   const safeId = userId.replace(/[^a-zA-Z0-9_-]/g, "_");
@@ -45,6 +53,7 @@ export async function downloadVideo(
     "--no-playlist",
     "--extractor-args",
     "youtube:player_client=mweb,tv,web",
+    ...getCookiesArgs(),
     url,
   ]);
   const info = JSON.parse(infoJson);
@@ -67,6 +76,7 @@ export async function downloadVideo(
         "--no-playlist",
         "--extractor-args",
         "youtube:player_client=mweb,tv,web",
+        ...getCookiesArgs(),
         url,
       ],
       { timeout: 300000 }
