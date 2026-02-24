@@ -130,6 +130,39 @@ function generateAssContent(
   return lines.join("\n");
 }
 
+export async function extractFullAudio(
+  userId: string,
+  videoPath: string
+): Promise<string> {
+  const userDir = getUserTmpDir(userId);
+  const outputPath = path.join(
+    userDir,
+    `full_audio_${Date.now()}_${Math.random().toString(36).slice(2)}.mp3`
+  );
+
+  await execFileAsync(
+    "ffmpeg",
+    [
+      "-y",
+      "-i",
+      videoPath,
+      "-vn",
+      "-acodec",
+      "libmp3lame",
+      "-ar",
+      "16000",
+      "-ac",
+      "1",
+      "-b:a",
+      "32k",
+      outputPath,
+    ],
+    { timeout: 600000 }
+  );
+
+  return outputPath;
+}
+
 export async function extractAudio(
   userId: string,
   videoPath: string,
@@ -232,6 +265,47 @@ export async function createClipWithCaptions(
     // Clean up temp ASS file
     if (fs.existsSync(assPath)) fs.unlinkSync(assPath);
   }
+
+  return outputFilename;
+}
+
+export async function createClipNoCaptions(
+  userId: string,
+  videoPath: string,
+  start: number,
+  end: number
+): Promise<string> {
+  const userDir = getUserTmpDir(userId);
+  const outputFilename = `clip_${Date.now()}_${Math.random().toString(36).slice(2)}.mp4`;
+  const outputPath = path.join(userDir, outputFilename);
+  const duration = end - start;
+
+  await execFileAsync(
+    "ffmpeg",
+    [
+      "-y",
+      "-ss",
+      start.toString(),
+      "-i",
+      videoPath,
+      "-t",
+      duration.toString(),
+      "-c:v",
+      "libx264",
+      "-preset",
+      "fast",
+      "-crf",
+      "23",
+      "-c:a",
+      "aac",
+      "-b:a",
+      "128k",
+      "-movflags",
+      "+faststart",
+      outputPath,
+    ],
+    { timeout: 300000 }
+  );
 
   return outputFilename;
 }
