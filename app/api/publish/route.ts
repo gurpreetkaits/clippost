@@ -124,16 +124,16 @@ export async function POST(request: NextRequest) {
     });
   } catch (error: unknown) {
     console.error("Publish error:", error);
-    const axiosErr = error as { response?: { data?: unknown } };
+    const axiosErr = error as { response?: { data?: unknown; status?: number }; config?: { url?: string } };
     if (axiosErr.response?.data) {
+      console.error("API response status:", axiosErr.response.status);
       console.error("API response data:", JSON.stringify(axiosErr.response.data, null, 2));
+      console.error("Request URL:", axiosErr.config?.url);
     }
+    const apiError = (axiosErr.response?.data as { error?: { message?: string } })?.error?.message;
     return NextResponse.json(
       {
-        error:
-          error instanceof Error
-            ? error.message
-            : "Failed to publish to Instagram",
+        error: apiError || (error instanceof Error ? error.message : "Failed to publish to Instagram"),
       },
       { status: 500 }
     );

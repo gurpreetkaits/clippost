@@ -1,5 +1,7 @@
 "use client";
 
+import { useRef, useEffect } from "react";
+
 interface CaptionSegment {
   start: number;
   end: number;
@@ -14,6 +16,7 @@ import { X } from "lucide-react";
 interface CaptionEditorProps {
   captions: CaptionSegment[];
   onUpdate: (captions: CaptionSegment[]) => void;
+  selectedIndex?: number | null;
 }
 
 function formatTime(seconds: number): string {
@@ -25,7 +28,20 @@ function formatTime(seconds: number): string {
 export default function CaptionEditor({
   captions,
   onUpdate,
+  selectedIndex,
 }: CaptionEditorProps) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const rowRefs = useRef<Map<number, HTMLDivElement>>(new Map());
+
+  // Auto-scroll selected caption into view
+  useEffect(() => {
+    if (selectedIndex == null) return;
+    const el = rowRefs.current.get(selectedIndex);
+    if (el) {
+      el.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }
+  }, [selectedIndex]);
+
   const handleTextChange = (index: number, text: string) => {
     const updated = [...captions];
     updated[index] = { ...updated[index], text, words: undefined };
@@ -46,11 +62,19 @@ export default function CaptionEditor({
   }
 
   return (
-    <div className="space-y-2 max-h-80 overflow-y-auto pr-2">
+    <div ref={containerRef} className="space-y-2 max-h-80 overflow-y-auto pr-2">
       {captions.map((caption, index) => (
         <div
           key={index}
-          className="flex gap-2 items-start rounded-lg p-3 bg-muted/50"
+          ref={(el) => {
+            if (el) rowRefs.current.set(index, el);
+            else rowRefs.current.delete(index);
+          }}
+          className={`flex gap-2 items-start rounded-lg p-3 transition-colors ${
+            selectedIndex === index
+              ? "bg-primary/15 ring-1 ring-primary/40"
+              : "bg-muted/50"
+          }`}
         >
           <Badge variant="outline" className="mt-1.5 font-mono text-xs whitespace-nowrap shrink-0">
             {formatTime(caption.start)} - {formatTime(caption.end)}

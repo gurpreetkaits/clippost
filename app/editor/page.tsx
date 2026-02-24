@@ -1,18 +1,28 @@
 "use client";
 
-import { useState, useCallback, useEffect, Suspense } from "react";
-import { useSearchParams, useRouter } from "next/navigation";
+import { useState, useCallback, useEffect, useRef, Suspense } from "react";
+import { useRouter } from "next/navigation";
 import dynamic from "next/dynamic";
-import ClipSelector from "@/components/ClipSelector";
 import CaptionEditor from "@/components/CaptionEditor";
-import CaptionPreview from "@/components/CaptionPreview";
+import CaptionTimeline from "@/components/CaptionTimeline";
 import CaptionStyleEditor from "@/components/CaptionStyleEditor";
 import PublishButton from "@/components/PublishButton";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Loader2, ArrowLeft, Play, Pause, AlertCircle, Settings } from "lucide-react";
-import Link from "next/link";
+import { Badge } from "@/components/ui/badge";
+import {
+  Loader2,
+  ArrowLeft,
+  Play,
+  Pause,
+  AlertCircle,
+  Download,
+  RefreshCw,
+  Sparkles,
+  Film,
+  CheckCircle2,
+} from "lucide-react";
 import { CaptionStyle, DEFAULT_CAPTION_STYLE } from "@/lib/caption-style";
 
 const VideoPlayer = dynamic(() => import("@/components/VideoPlayer"), {
@@ -23,124 +33,70 @@ interface CaptionSegment {
   start: number;
   end: number;
   text: string;
+  words?: { word: string; start: number; end: number }[];
+}
+
+interface EditorData {
+  clipFilename: string;
+  videoFilename: string;
+  title: string;
+  duration: number;
+  start: number;
+  end: number;
+  segments: CaptionSegment[];
+  segmentReason: string;
 }
 
 function EditorContent() {
-  const searchParams = useSearchParams();
   const router = useRouter();
 
-  // Check for auto-trim data in sessionStorage
-  const [autoTrimLoaded, setAutoTrimLoaded] = useState(false);
-  const [atFilename, setAtFilename] = useState("");
-  const [atTitle, setAtTitle] = useState("");
-  const [atDuration, setAtDuration] = useState(0);
-  const [atStart, setAtStart] = useState(0);
-  const [atEnd, setAtEnd] = useState(0);
-  const [atCaptions, setAtCaptions] = useState<CaptionSegment[]>([]);
+  const [editorData, setEditorData] = useState<EditorData | null>(null);
+  const [loaded, setLoaded] = useState(false);
 
-  useEffect(() => {
-    const raw = sessionStorage.getItem("autoTrimData");
-    if (raw) {
-      try {
-        const data = JSON.parse(raw);
-        setAtFilename(data.filename || "");
-        setAtTitle(data.title || "");
-        setAtDuration(data.duration || 0);
-        setAtStart(data.start || 0);
-        setAtEnd(data.end || 0);
-        setAtCaptions(data.captions || []);
-        setAutoTrimLoaded(true);
-      } catch {}
-      sessionStorage.removeItem("autoTrimData");
-    }
-  }, []);
-
-  const filename = autoTrimLoaded ? atFilename : (searchParams.get("filename") || "");
-  const title = autoTrimLoaded ? atTitle : (searchParams.get("title") || "");
-  const totalDuration = autoTrimLoaded ? atDuration : parseFloat(searchParams.get("duration") || "0");
-  const startTime = autoTrimLoaded ? atStart : parseFloat(searchParams.get("startTime") || "0");
-
-  const [start, setStart] = useState(Math.min(startTime, totalDuration));
-  const [end, setEnd] = useState(Math.min(startTime + 30, totalDuration));
+  // Editor state
+  const [clipFilename, setClipFilename] = useState("");
+  const [segments, setSegments] = useState<CaptionSegment[]>([]);
+  const [captionStyle, setCaptionStyle] = useState<CaptionStyle>(DEFAULT_CAPTION_STYLE);
   const [playing, setPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
-  const [captions, setCaptions] = useState<CaptionSegment[]>([]);
-  const [clipFilename, setClipFilename] = useState<string | null>(null);
-  const [captionStyle, setCaptionStyle] = useState<CaptionStyle>(DEFAULT_CAPTION_STYLE);
-
-  const [transcribing, setTranscribing] = useState(false);
+  const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState("");
 
-  // Apply auto-trim data once loaded
+  // Load data from sessionStorage on mount
   useEffect(() => {
-    if (autoTrimLoaded) {
-      setStart(atStart);
-      setEnd(atEnd);
-      if (atCaptions.length > 0) {
-        setCaptions(atCaptions);
-      }
+    const raw = sessionStorage.getItem("editorData");
+    if (raw) {
+      try {
+        const data: EditorData = JSON.parse(raw);
+        setEditorData(data);
+        setClipFilename(data.clipFilename);
+        setSegments(data.segments || []);
+      } catch {}
+      sessionStorage.removeItem("editorData");
     }
-  }, [autoTrimLoaded, atStart, atEnd, atCaptions]);
+    setLoaded(true);
+  }, []);
 
-  const videoUrl = `/api/video?file=${filename}`;
-  const clipUrl = clipFilename
-    ? `/api/video?file=${clipFilename}`
-    : null;
+  // Map clip currentTime (starts at 0) to original video time for caption matching
+  const originalTime = editorData ? editorData.start + currentTime : currentTime;
 
-  const handleTranscribe = useCallback(async () => {
-    setTranscribing(true);
-    setError("");
-
-    try {
-      const response = await fetch("/api/transcribe", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ filename, start, end }),
-      });
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.error || "Transcription failed");
-      }
-
-      setCaptions(data.segments);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Transcription failed");
-    } finally {
-      setTranscribing(false);
-    }
-  }, [filename, start, end]);
-
-  const handleGenerateClip = useCallback(async () => {
+  const handleRegenerateClip = useCallback(async () => {
+    if (!editorData) return;
     setGenerating(true);
     setError("");
 
     try {
-      // Auto-transcribe if no captions exist
-      let finalCaptions = captions;
-      if (finalCaptions.length === 0) {
-        const transcribeRes = await fetch("/api/transcribe", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ filename, start, end }),
-        });
-
-        const transcribeData = await transcribeRes.json();
-
-        if (!transcribeRes.ok) {
-          throw new Error(transcribeData.error || "Transcription failed");
-        }
-
-        finalCaptions = transcribeData.segments;
-        setCaptions(finalCaptions);
-      }
-
       const response = await fetch("/api/clip", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ filename, start, end, captions: finalCaptions, style: captionStyle }),
+        body: JSON.stringify({
+          filename: editorData.videoFilename,
+          start: editorData.start,
+          end: editorData.end,
+          captions: segments,
+          style: captionStyle,
+        }),
       });
 
       const data = await response.json();
@@ -155,15 +111,32 @@ function EditorContent() {
     } finally {
       setGenerating(false);
     }
-  }, [filename, start, end, captions, captionStyle]);
+  }, [editorData, segments, captionStyle]);
 
-  if (!filename) {
+  const handleSegmentTimingChange = useCallback(
+    (index: number, edge: "start" | "end", newTime: number) => {
+      setSegments((prev) => {
+        const updated = [...prev];
+        updated[index] = {
+          ...updated[index],
+          [edge]: newTime,
+          words: undefined, // clear word-level data when timing changes
+        };
+        return updated;
+      });
+    },
+    []
+  );
+
+  // Fallback: no data
+  if (loaded && !editorData) {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <div className="text-center space-y-4">
+          <Film className="h-12 w-12 text-muted-foreground/40 mx-auto" />
           <p className="text-muted-foreground">No video loaded.</p>
           <Button variant="ghost" onClick={() => router.push("/")}>
-            <ArrowLeft />
+            <ArrowLeft className="h-4 w-4 mr-1" />
             Go back
           </Button>
         </div>
@@ -171,146 +144,180 @@ function EditorContent() {
     );
   }
 
+  // Loading state
+  if (!loaded || !editorData) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
+
+  const clipUrl = `/api/video?file=${encodeURIComponent(clipFilename)}`;
+  const clipDuration = editorData.end - editorData.start;
+
   return (
-    <div className="min-h-screen p-4 md:p-8">
-      <div className="max-w-6xl mx-auto space-y-6">
-        {/* Header */}
-        <div className="flex items-center justify-between">
-          <div>
+    <div className="min-h-screen flex flex-col">
+      <div className="flex-1 p-4 md:p-6">
+        <div className="max-w-7xl mx-auto space-y-4">
+          {/* Header */}
+          <div className="flex items-center gap-3">
             <Button
               variant="ghost"
               size="sm"
               onClick={() => router.push("/")}
-              className="mb-1 text-muted-foreground"
+              className="text-muted-foreground"
             >
-              <ArrowLeft />
+              <ArrowLeft className="h-4 w-4" />
               Back
             </Button>
-            <h1 className="text-xl font-semibold text-foreground truncate max-w-lg">
-              {title}
+            <h1 className="text-lg font-semibold text-foreground truncate flex-1">
+              {editorData.title}
             </h1>
-          </div>
-          <Link href="/settings">
-            <Button variant="ghost" size="sm" title="Settings">
-              <Settings className="h-4 w-4" />
-            </Button>
-          </Link>
-        </div>
-
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* Left column: Video + Clip Selector */}
-          <div className="space-y-4">
-            <div className="relative">
-              <VideoPlayer
-                url={videoUrl}
-                start={start}
-                end={end}
-                playing={playing}
-                onProgress={setCurrentTime}
-              />
-              <CaptionPreview captions={captions} currentTime={currentTime} style={captionStyle} />
-            </div>
-
-            <ClipSelector
-              duration={totalDuration}
-              start={start}
-              end={end}
-              currentTime={currentTime}
-              onStartChange={setStart}
-              onEndChange={setEnd}
-            />
-
-            <div className="flex gap-2">
-              <Button
-                variant="secondary"
-                size="sm"
-                onClick={() => setPlaying(!playing)}
-              >
-                {playing ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
-                {playing ? "Pause" : "Play Clip"}
-              </Button>
-              <Button
-                size="sm"
-                onClick={handleTranscribe}
-                disabled={transcribing || end - start > 90}
-              >
-                {transcribing ? (
-                  <>
-                    <Loader2 className="animate-spin" />
-                    Transcribing...
-                  </>
-                ) : (
-                  "Transcribe"
-                )}
-              </Button>
-            </div>
+            {editorData.segmentReason && (
+              <Badge variant="secondary" className="hidden sm:flex gap-1 shrink-0">
+                <Sparkles className="h-3 w-3" />
+                {editorData.segmentReason.length > 60
+                  ? editorData.segmentReason.slice(0, 60) + "..."
+                  : editorData.segmentReason}
+              </Badge>
+            )}
           </div>
 
-          {/* Right column: Captions + Style + Generate + Publish */}
-          <div className="space-y-4">
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-sm">Captions</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <CaptionEditor captions={captions} onUpdate={setCaptions} />
-              </CardContent>
-            </Card>
+          {/* Two-column layout */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {/* LEFT: Video player */}
+            <div className="lg:sticky lg:top-4 lg:self-start space-y-4">
+              <div className="space-y-2">
+                <div className="flex items-center gap-2">
+                  <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                    Generated Clip
+                  </p>
+                  <CheckCircle2 className="h-3.5 w-3.5 text-green-500" />
+                </div>
+                <VideoPlayer
+                  key={clipFilename}
+                  url={clipUrl}
+                  start={0}
+                  end={clipDuration}
+                  playing={playing}
+                  onProgress={setCurrentTime}
+                />
+              </div>
 
-            <CaptionStyleEditor style={captionStyle} onChange={setCaptionStyle} />
+              <div className="flex gap-2">
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => setPlaying(!playing)}
+                >
+                  {playing ? (
+                    <Pause className="h-4 w-4" />
+                  ) : (
+                    <Play className="h-4 w-4" />
+                  )}
+                  {playing ? "Pause" : "Play"}
+                </Button>
+                <span className="flex items-center text-xs text-muted-foreground">
+                  {formatTimestamp(editorData.start)} &ndash;{" "}
+                  {formatTimestamp(editorData.end)} ({Math.round(clipDuration)}s)
+                </span>
+              </div>
+            </div>
 
-            <Button
-              onClick={handleGenerateClip}
-              disabled={generating || end - start > 90}
-              className="w-full bg-green-600 hover:bg-green-700 text-white"
-              size="lg"
-            >
-              {generating ? (
-                <>
-                  <Loader2 className="animate-spin" />
-                  Generating Clip...
-                </>
-              ) : (
-                "Generate Final Clip"
-              )}
-            </Button>
-
-            {/* Final clip preview */}
-            {clipUrl && (
+            {/* RIGHT: Captions + Style + Actions */}
+            <div className="space-y-5">
+              {/* Captions */}
               <Card>
-                <CardHeader>
-                  <CardTitle className="text-sm">Final Clip Preview</CardTitle>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm">Captions</CardTitle>
                 </CardHeader>
-                <CardContent className="space-y-3">
-                  <video
-                    src={clipUrl}
-                    controls
-                    className="w-full rounded-lg bg-black"
+                <CardContent>
+                  <CaptionEditor
+                    captions={segments}
+                    onUpdate={setSegments}
+                    selectedIndex={selectedIndex}
                   />
-                  <a
-                    href={clipUrl}
-                    download={`clip_${filename}`}
-                    className="block text-center text-blue-400 hover:text-blue-300 text-sm transition-colors"
-                  >
-                    Download Clip
-                  </a>
                 </CardContent>
               </Card>
-            )}
 
-            <PublishButton clipFilename={clipFilename} />
+              {/* Style */}
+              <CaptionStyleEditor style={captionStyle} onChange={setCaptionStyle} />
 
-            {error && (
-              <Alert variant="destructive">
-                <AlertCircle className="h-4 w-4" />
-                <AlertDescription>{error}</AlertDescription>
-              </Alert>
-            )}
+              {/* Regenerate */}
+              <Button
+                onClick={handleRegenerateClip}
+                disabled={generating}
+                className="w-full bg-green-600 hover:bg-green-700 text-white"
+                size="lg"
+              >
+                {generating ? (
+                  <>
+                    <Loader2 className="animate-spin" />
+                    Regenerating Clip...
+                  </>
+                ) : (
+                  <>
+                    <RefreshCw className="h-4 w-4" />
+                    Regenerate Clip
+                  </>
+                )}
+              </Button>
+
+              {/* Download + Publish */}
+              <div className="flex gap-2">
+                <a
+                  href={clipUrl}
+                  download={`clip_${editorData.videoFilename}`}
+                  className="flex-1"
+                >
+                  <Button variant="outline" size="lg" className="w-full">
+                    <Download className="h-4 w-4 mr-1" />
+                    Download
+                  </Button>
+                </a>
+                <div className="flex-1">
+                  <PublishButton
+                    clipFilename={clipFilename}
+                    videoTitle={editorData.title}
+                    clipDuration={clipDuration}
+                  />
+                </div>
+              </div>
+
+              {error && (
+                <Alert variant="destructive">
+                  <AlertCircle className="h-4 w-4" />
+                  <AlertDescription>{error}</AlertDescription>
+                </Alert>
+              )}
+            </div>
           </div>
+
+          {/* Full-width: Caption Timeline */}
+          {segments.length > 0 && (
+            <div className="mt-2">
+              <CaptionTimeline
+                segments={segments}
+                clipStart={editorData.start}
+                clipEnd={editorData.end}
+                currentTime={originalTime}
+                selectedIndex={selectedIndex}
+                onSelectSegment={setSelectedIndex}
+                onSegmentTimingChange={handleSegmentTimingChange}
+              />
+            </div>
+          )}
         </div>
       </div>
     </div>
   );
+}
+
+function formatTimestamp(seconds: number): string {
+  const m = Math.floor(seconds / 60);
+  const s = Math.floor(seconds % 60);
+  return `${m}:${String(s).padStart(2, "0")}`;
 }
 
 export default function EditorPage() {

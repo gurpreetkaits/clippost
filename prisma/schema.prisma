@@ -32,6 +32,7 @@ model User {
   videos            Video[]
   clips             Clip[]
   usageRecords      UsageRecord[]
+  billingEvents     BillingEvent[]
 
   @@map("users")
 }
@@ -135,4 +136,22 @@ enum UsageAction {
   CLIP_CREATED
   VIDEO_DOWNLOADED
   PUBLISH
+}
+
+model BillingEvent {
+  id              String   @id @default(cuid())
+  userId          String?
+  user            User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  polarCustomerId String?
+  eventType       String
+  amount          Int?     // cents
+  currency        String?
+  status          String?
+  subscriptionId  String?
+  productId       String?
+  metadata        Json?
+  createdAt       DateTime @default(now())
+
+  @@index([userId, createdAt])
+  @@map("billing_events")
 }

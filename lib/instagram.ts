@@ -1,6 +1,6 @@
 import axios from "axios";
 
-const GRAPH_API_BASE = "https://graph.instagram.com/v21.0";
+const GRAPH_API_BASE = "https://graph.facebook.com/v21.0";
 
 export interface InstagramCredentials {
   accessToken: string;

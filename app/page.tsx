@@ -2,7 +2,7 @@
 
 import { useState, useRef, useCallback, useEffect, Suspense } from "react";
 import { useSession, signIn } from "next-auth/react";
-import { useSearchParams } from "next/navigation";
+import { useSearchParams, useRouter } from "next/navigation";
 import Image from "next/image";
 import Link from "next/link";
 import dynamic from "next/dynamic";
@@ -73,13 +73,28 @@ interface CaptionSegment {
   text: string;
 }
 
-const STEPS = [
-  { key: "downloading", label: "Download" },
-  { key: "extracting_audio", label: "Audio" },
-  { key: "transcribing", label: "Transcribe" },
-  { key: "analyzing", label: "Analyze" },
-  { key: "generating_clip", label: "Generate" },
-] as const;
+const FUN_WORDS = [
+  "Philosophizing...",
+  "Contemplating...",
+  "Manifesting...",
+  "Ruminating...",
+  "Brainstorming...",
+  "Hallucinating...",
+  "Pondering...",
+  "Daydreaming...",
+  "Extrapolating...",
+  "Vibing...",
+  "Theorizing...",
+  "Imagining...",
+  "Synthesizing...",
+  "Channeling...",
+  "Conjuring...",
+  "Calibrating...",
+  "Meditating...",
+  "Percolating...",
+  "Harmonizing...",
+  "Decoding...",
+];
 
 function AuthGate({ children, fallback }: { children: React.ReactNode; fallback?: React.ReactNode }) {
   const { status } = useSession();
@@ -240,6 +255,16 @@ function HomeContent() {
   const [progress, setProgress] = useState<ProgressState | null>(null);
   const [autoTrimResult, setAutoTrimResult] = useState<AutoTrimResult | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+
+  // Rotating fun word for progress bar
+  const [funWord, setFunWord] = useState(() => FUN_WORDS[Math.floor(Math.random() * FUN_WORDS.length)]);
+  useEffect(() => {
+    if (!loading || !progress) return;
+    const interval = setInterval(() => {
+      setFunWord(FUN_WORDS[Math.floor(Math.random() * FUN_WORDS.length)]);
+    }, 2000);
+    return () => clearInterval(interval);
+  }, [loading, progress]);
 
   // Inline editor state (manual mode)
   const [videoData, setVideoData] = useState<VideoData | null>(null);
@@ -488,21 +513,25 @@ function HomeContent() {
     }
   }, [videoData, start, end, captions, captionStyle]);
 
-  // Auto-trim edit: load into inline editor
+  const router = useRouter();
+
+  // Auto-trim edit: store data and navigate to /editor
   const handleEditAutoTrim = () => {
     if (!autoTrimResult) return;
-    setVideoData({
-      filename: autoTrimResult.videoFilename,
-      title: autoTrimResult.title,
-      duration: autoTrimResult.duration,
-    });
-    setStart(autoTrimResult.start);
-    setEnd(autoTrimResult.end);
-    setCaptions(autoTrimResult.segments);
-    setClipFilename(null);
-    setAutoTrimResult(null);
-    setAutoTrim(false);
-    setProgress(null);
+    sessionStorage.setItem(
+      "editorData",
+      JSON.stringify({
+        clipFilename: autoTrimResult.clipFilename,
+        videoFilename: autoTrimResult.videoFilename,
+        title: autoTrimResult.title,
+        duration: autoTrimResult.duration,
+        start: autoTrimResult.start,
+        end: autoTrimResult.end,
+        segments: autoTrimResult.segments,
+        segmentReason: autoTrimResult.segmentReason,
+      })
+    );
+    router.push("/editor");
   };
 
   const isAutoTrimReady = !autoTrim || purpose.trim().length > 0;
@@ -1013,44 +1042,20 @@ function HomeContent() {
               {/* Progress Bar */}
               {progress && loading && (
                 <div className="space-y-3">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-sm text-muted-foreground animate-pulse">
+                      {funWord}
+                    </span>
+                    <span className="text-sm font-mono font-medium text-foreground">
+                      {Math.round(progress.percent)}%
+                    </span>
+                  </div>
                   <div className="w-full bg-muted rounded-full h-2 overflow-hidden">
                     <div
-                      className="h-full bg-primary rounded-full transition-all duration-500 ease-out"
+                      className="h-full bg-primary rounded-full transition-all duration-700 ease-out"
                       style={{ width: `${progress.percent}%` }}
                     />
                   </div>
-                  <div className="flex justify-between">
-                    {STEPS.map((s) => {
-                      const stepIdx = STEPS.findIndex(
-                        (x) => x.key === s.key
-                      );
-                      const currentIdx = STEPS.findIndex(
-                        (x) => x.key === progress.step
-                      );
-                      const isDone = stepIdx < currentIdx;
-                      const isCurrent = s.key === progress.step;
-                      return (
-                        <span
-                          key={s.key}
-                          className={`text-xs ${
-                            isDone
-                              ? "text-primary font-medium"
-                              : isCurrent
-                              ? "text-foreground font-semibold"
-                              : "text-muted-foreground"
-                          }`}
-                        >
-                          {isDone ? (
-                            <CheckCircle2 className="inline h-3 w-3 mr-0.5" />
-                          ) : null}
-                          {s.label}
-                        </span>
-                      );
-                    })}
-                  </div>
-                  <p className="text-xs text-muted-foreground text-center">
-                    {progress.message}
-                  </p>
                   <Button
                     type="button"
                     variant="outline"
