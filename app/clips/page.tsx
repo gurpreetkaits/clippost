@@ -85,11 +85,7 @@ export default function ClipsPage() {
   };
 
   const handleEdit = (clip: ClipItem) => {
-    // Navigate to home with clip data encoded in query params
-    const params = new URLSearchParams({
-      editClipId: clip.id,
-    });
-    router.push(`/?${params.toString()}`);
+    router.push(`/editor/${clip.id}`);
   };
 
   return (

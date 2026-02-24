@@ -11,7 +11,7 @@ export interface CaptionStyle {
 
 export const DEFAULT_CAPTION_STYLE: CaptionStyle = {
   fontFamily: "Helvetica Neue",
-  fontSize: 48,
+  fontSize: 55,
   textColor: "#000000",
   bgColor: "#FFFFFF",
   bgOpacity: 100,
