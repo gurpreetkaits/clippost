@@ -54,6 +54,23 @@ export default function Footer() {
               </nav>
             </div>
             <div className="space-y-2">
+              <p className="text-xs font-medium text-foreground">Legal</p>
+              <nav className="flex flex-col gap-1.5">
+                <Link
+                  href="/terms"
+                  className="text-muted-foreground hover:text-foreground transition-colors"
+                >
+                  Terms
+                </Link>
+                <Link
+                  href="/privacy"
+                  className="text-muted-foreground hover:text-foreground transition-colors"
+                >
+                  Privacy
+                </Link>
+              </nav>
+            </div>
+            <div className="space-y-2">
               <p className="text-xs font-medium text-foreground">Connect</p>
               <nav className="flex flex-col gap-1.5">
                 <a
