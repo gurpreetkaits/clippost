@@ -9,7 +9,8 @@ interface VideoPlayerProps {
   playing?: boolean;
   onProgress?: (seconds: number) => void;
   onDuration?: (duration: number) => void;
-  style?: React.CSSProperties;
+  /** When provided, the wrapper fills its parent (no own aspect ratio). */
+  fill?: boolean;
 }
 
 export default function VideoPlayer({
@@ -19,7 +20,7 @@ export default function VideoPlayer({
   playing = false,
   onProgress,
   onDuration,
-  style,
+  fill,
 }: VideoPlayerProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
 
@@ -71,14 +72,14 @@ export default function VideoPlayer({
   return (
     <div
       className="relative w-full bg-black rounded-lg overflow-hidden"
-      style={style ? { width: "100%", height: "100%" } : { aspectRatio: "16/9" }}
+      style={fill ? { width: "100%", height: "100%" } : { aspectRatio: "16/9" }}
     >
       <video
         ref={videoRef}
         src={url}
         controls
         className="w-full h-full"
-        style={style ?? { objectFit: "contain" }}
+        style={{ objectFit: fill ? "cover" : "contain" }}
         preload="auto"
       />
     </div>

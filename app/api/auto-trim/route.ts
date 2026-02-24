@@ -4,6 +4,7 @@ import { downloadVideo, getVideoPath } from "@/lib/youtube";
 import { isValidYouTubeUrl } from "@/lib/youtube";
 import { extractFullAudio, createClipWithCaptions, createClipNoCaptions, cleanup } from "@/lib/ffmpeg";
 import { transcribeFullAudio } from "@/lib/whisper";
+import { transcribeFullAudioSarvam } from "@/lib/sarvam";
 import { splitLongSegments } from "@/lib/whisper";
 import { findBestSegment, filterCaptionsForRange } from "@/lib/ai";
 import { NextResponse } from "next/server";
@@ -21,14 +22,14 @@ export async function POST(request: NextRequest) {
   }
   const { userId } = authResult;
 
-  let body: { url: string; purpose: string; generateCaptions: boolean };
+  let body: { url: string; purpose: string; generateCaptions: boolean; language?: string };
   try {
     body = await request.json();
   } catch {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
 
-  const { url, purpose, generateCaptions } = body;
+  const { url, purpose, generateCaptions, language } = body;
 
   if (!url || !isValidYouTubeUrl(url)) {
     return NextResponse.json({ error: "Invalid YouTube URL" }, { status: 400 });
@@ -87,10 +88,14 @@ export async function POST(request: NextRequest) {
 
         // Step 3: Transcribe
         progress("transcribing", "Transcribing audio...", 37);
-        const segments = await transcribeFullAudio(audioPath, (chunkPercent) => {
+        const useSarvam = language && language !== "en";
+        const transcribeProgress = (chunkPercent: number) => {
           const scaled = 35 + Math.round((chunkPercent / 100) * 30);
           progress("transcribing", "Transcribing audio...", scaled);
-        });
+        };
+        const segments = useSarvam
+          ? await transcribeFullAudioSarvam(audioPath, language, transcribeProgress)
+          : await transcribeFullAudio(audioPath, transcribeProgress);
         progress("transcribing", "Transcription complete", 65);
 
         // Step 4: Analyze with GPT

@@ -39,6 +39,14 @@ import {
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { CaptionStyle, DEFAULT_CAPTION_STYLE } from "@/lib/caption-style";
+import {
+  VideoLayout,
+  DEFAULT_LAYOUT,
+  OUTPUT_FORMATS,
+  FRAME_TEMPLATES,
+  getFrameConfig,
+} from "@/lib/video-layout";
+import { LANGUAGES } from "@/lib/languages";
 
 const VideoPlayer = dynamic(() => import("@/components/VideoPlayer"), {
   ssr: false,
@@ -251,9 +259,14 @@ function HomeContent() {
   const [purpose, setPurpose] = useState("");
   const [generateCaptions, setGenerateCaptions] = useState(true);
 
+  // Language
+  const [language, setLanguage] = useState("en");
+
   // Auto-trim state
   const [progress, setProgress] = useState<ProgressState | null>(null);
   const [autoTrimResult, setAutoTrimResult] = useState<AutoTrimResult | null>(null);
+  const [autoTrimLayout, setAutoTrimLayout] = useState<VideoLayout>(DEFAULT_LAYOUT);
+  const [downloadingWithLayout, setDownloadingWithLayout] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
 
   // Rotating fun word for progress bar
@@ -358,7 +371,7 @@ function HomeContent() {
       const response = await fetch("/api/auto-trim", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url, purpose, generateCaptions }),
+        body: JSON.stringify({ url, purpose, generateCaptions, language }),
         signal: controller.signal,
       });
 
@@ -446,7 +459,7 @@ function HomeContent() {
       const response = await fetch("/api/transcribe", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ filename: videoData.filename, start, end }),
+        body: JSON.stringify({ filename: videoData.filename, start, end, language }),
       });
 
       const data = await response.json();
@@ -461,7 +474,7 @@ function HomeContent() {
     } finally {
       setTranscribing(false);
     }
-  }, [videoData, start, end]);
+  }, [videoData, start, end, language]);
 
   const handleGenerateClip = useCallback(async () => {
     if (!videoData) return;
@@ -474,7 +487,7 @@ function HomeContent() {
         const transcribeRes = await fetch("/api/transcribe", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ filename: videoData.filename, start, end }),
+          body: JSON.stringify({ filename: videoData.filename, start, end, language }),
         });
 
         const transcribeData = await transcribeRes.json();
@@ -511,9 +524,47 @@ function HomeContent() {
     } finally {
       setGenerating(false);
     }
-  }, [videoData, start, end, captions, captionStyle]);
+  }, [videoData, start, end, captions, captionStyle, language]);
 
   const router = useRouter();
+
+  // Regenerate auto-trim clip with layout applied
+  const regenerateWithLayout = useCallback(async (): Promise<string> => {
+    if (!autoTrimResult) throw new Error("No auto-trim result");
+    if (autoTrimLayout.format === "original") return autoTrimResult.clipFilename;
+
+    const response = await fetch("/api/clip", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        filename: autoTrimResult.videoFilename,
+        start: autoTrimResult.start,
+        end: autoTrimResult.end,
+        captions: autoTrimResult.segments || [],
+        layout: autoTrimLayout,
+      }),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "Clip generation failed");
+    return data.clipFilename;
+  }, [autoTrimResult, autoTrimLayout]);
+
+  const handleDownloadWithLayout = useCallback(async () => {
+    if (!autoTrimResult) return;
+    setDownloadingWithLayout(true);
+    setError("");
+    try {
+      const filename = await regenerateWithLayout();
+      const link = document.createElement("a");
+      link.href = `/api/video?file=${encodeURIComponent(filename)}`;
+      link.download = `clip_${autoTrimResult.videoFilename}`;
+      link.click();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Download failed");
+    } finally {
+      setDownloadingWithLayout(false);
+    }
+  }, [autoTrimResult, regenerateWithLayout]);
 
   // Auto-trim edit: store data and navigate to /editor
   const handleEditAutoTrim = () => {
@@ -726,38 +777,52 @@ function HomeContent() {
                   onStartChange={setStart}
                   onEndChange={setEnd}
                 />
-                <div className="flex gap-2">
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    onClick={() => setPlaying(!playing)}
-                  >
-                    {playing ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
-                    {playing ? "Pause" : "Play Clip"}
-                  </Button>
-                  <AuthGate
-                    fallback={
-                      <Button size="sm" variant="outline" onClick={() => signIn("google")}>
-                        <Lock className="h-4 w-4 mr-1" />
-                        Sign in to transcribe
-                      </Button>
-                    }
-                  >
+                <div className="space-y-2">
+                  <div className="flex gap-2">
                     <Button
+                      variant="secondary"
                       size="sm"
-                      onClick={handleTranscribe}
-                      disabled={transcribing || end - start > 90}
+                      onClick={() => setPlaying(!playing)}
                     >
-                      {transcribing ? (
-                        <>
-                          <Loader2 className="animate-spin" />
-                          Transcribing...
-                        </>
-                      ) : (
-                        "Transcribe"
-                      )}
+                      {playing ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
+                      {playing ? "Pause" : "Play Clip"}
                     </Button>
-                  </AuthGate>
+                    <AuthGate
+                      fallback={
+                        <Button size="sm" variant="outline" onClick={() => signIn("google")}>
+                          <Lock className="h-4 w-4 mr-1" />
+                          Sign in to transcribe
+                        </Button>
+                      }
+                    >
+                      <Button
+                        size="sm"
+                        onClick={handleTranscribe}
+                        disabled={transcribing || end - start > 90}
+                      >
+                        {transcribing ? (
+                          <>
+                            <Loader2 className="animate-spin" />
+                            Transcribing...
+                          </>
+                        ) : (
+                          "Transcribe"
+                        )}
+                      </Button>
+                    </AuthGate>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <label className="text-xs text-muted-foreground shrink-0">Language</label>
+                    <select
+                      value={language}
+                      onChange={(e) => setLanguage(e.target.value)}
+                      className="rounded-md border border-input bg-background px-2 py-1 text-xs"
+                    >
+                      {LANGUAGES.map((l) => (
+                        <option key={l.code} value={l.code}>{l.label}</option>
+                      ))}
+                    </select>
+                  </div>
                 </div>
               </div>
 
@@ -1022,6 +1087,19 @@ function HomeContent() {
                       Burn in karaoke captions
                     </span>
                   </label>
+                  <div className="space-y-1">
+                    <label className="text-sm text-muted-foreground">Language</label>
+                    <select
+                      value={language}
+                      onChange={(e) => setLanguage(e.target.value)}
+                      disabled={loading}
+                      className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                    >
+                      {LANGUAGES.map((l) => (
+                        <option key={l.code} value={l.code}>{l.label}</option>
+                      ))}
+                    </select>
+                  </div>
                   <Button
                     type="submit"
                     disabled={loading || !url || !isAutoTrimReady}
@@ -1091,23 +1169,108 @@ function HomeContent() {
                   </p>
                 </div>
 
-                <video
-                  src={`/api/video?file=${encodeURIComponent(autoTrimResult.clipFilename)}`}
-                  controls
-                  className="w-full rounded-lg"
-                />
+                {/* Video preview */}
+                <div
+                  className={`relative ${autoTrimLayout.format === "9:16" ? "mx-auto bg-black rounded-lg overflow-hidden" : ""}`}
+                  style={
+                    autoTrimLayout.format === "9:16"
+                      ? {
+                          aspectRatio: "9/16",
+                          maxHeight: "50vh",
+                          ...(autoTrimLayout.frame !== "fill"
+                            ? { display: "flex", alignItems: "center", justifyContent: "center" }
+                            : {}),
+                        }
+                      : {}
+                  }
+                >
+                  {autoTrimLayout.format === "9:16" && autoTrimLayout.frame !== "fill" ? (
+                    <div
+                      style={{
+                        width: `${getFrameConfig(autoTrimLayout.frame).videoWidthPct}%`,
+                        borderRadius: `${getFrameConfig(autoTrimLayout.frame).radiusPct}%`,
+                        overflow: "hidden",
+                      }}
+                    >
+                      <video
+                        src={`/api/video?file=${encodeURIComponent(autoTrimResult.clipFilename)}`}
+                        controls
+                        className="w-full rounded-lg"
+                      />
+                    </div>
+                  ) : (
+                    <video
+                      src={`/api/video?file=${encodeURIComponent(autoTrimResult.clipFilename)}`}
+                      controls
+                      className="w-full rounded-lg"
+                      style={autoTrimLayout.format === "9:16" ? { objectFit: "cover", height: "100%" } : {}}
+                    />
+                  )}
+                </div>
+
+                {/* Layout selector */}
+                <div className="space-y-3 rounded-lg border p-3">
+                  <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Layout</p>
+                  <div>
+                    <p className="text-xs text-muted-foreground mb-1.5">Format</p>
+                    <div className="flex gap-1.5">
+                      {OUTPUT_FORMATS.map((f) => (
+                        <button
+                          key={f.id}
+                          onClick={() => setAutoTrimLayout((l) => ({ ...l, format: f.id }))}
+                          className={`px-3 py-1.5 text-xs rounded-md border transition-colors ${
+                            autoTrimLayout.format === f.id
+                              ? "bg-primary text-primary-foreground border-primary"
+                              : "bg-muted/50 text-muted-foreground border-border hover:bg-muted"
+                          }`}
+                        >
+                          {f.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  {autoTrimLayout.format === "9:16" && (
+                    <div>
+                      <p className="text-xs text-muted-foreground mb-1.5">Frame</p>
+                      <div className="flex flex-wrap gap-1.5">
+                        {FRAME_TEMPLATES.map((t) => (
+                          <button
+                            key={t.id}
+                            onClick={() => setAutoTrimLayout((l) => ({ ...l, frame: t.id }))}
+                            className={`px-2.5 py-1 text-xs rounded-md border transition-colors ${
+                              autoTrimLayout.frame === t.id
+                                ? "bg-primary text-primary-foreground border-primary"
+                                : "bg-muted/50 text-muted-foreground border-border hover:bg-muted"
+                            }`}
+                            title={t.desc}
+                          >
+                            {t.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
 
                 <div className="flex gap-2">
-                  <a
-                    href={`/api/video?file=${encodeURIComponent(autoTrimResult.clipFilename)}`}
-                    download
+                  <Button
+                    variant="outline"
                     className="flex-1"
+                    onClick={handleDownloadWithLayout}
+                    disabled={downloadingWithLayout}
                   >
-                    <Button variant="outline" className="w-full">
-                      <Download className="h-4 w-4 mr-2" />
-                      Download
-                    </Button>
-                  </a>
+                    {downloadingWithLayout ? (
+                      <>
+                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                        Preparing...
+                      </>
+                    ) : (
+                      <>
+                        <Download className="h-4 w-4 mr-2" />
+                        Download
+                      </>
+                    )}
+                  </Button>
                   <Button
                     variant="outline"
                     className="flex-1"
@@ -1120,6 +1283,7 @@ function HomeContent() {
                       clipFilename={autoTrimResult.clipFilename}
                       videoTitle={autoTrimResult.title}
                       clipDuration={autoTrimResult.end - autoTrimResult.start}
+                      prepareClip={autoTrimLayout.format !== "original" ? regenerateWithLayout : undefined}
                     />
                   </div>
                 </div>

@@ -1,77 +1,38 @@
-import type { CSSProperties } from "react";
-
-export type AspectRatio = "original" | "9:16" | "1:1" | "4:5" | "16:9";
-export type MaskType = "none" | "rounded" | "soft" | "shadow-bottom" | "shadow-top-bottom" | "rounded-square";
+export type OutputFormat = "original" | "9:16";
+export type FrameTemplate = "fill" | "cinema" | "compact" | "floating";
 
 export interface VideoLayout {
-  aspectRatio: AspectRatio;
-  mask: MaskType;
+  format: OutputFormat;
+  frame: FrameTemplate;
 }
 
 export const DEFAULT_LAYOUT: VideoLayout = {
-  aspectRatio: "original",
-  mask: "none",
+  format: "original",
+  frame: "cinema",
 };
 
-export const ASPECT_RATIOS: { id: AspectRatio; label: string; desc: string }[] = [
-  { id: "original", label: "Original", desc: "Keep source ratio" },
-  { id: "9:16", label: "9:16", desc: "Vertical" },
-  { id: "1:1", label: "1:1", desc: "Square" },
-  { id: "4:5", label: "4:5", desc: "Portrait" },
-  { id: "16:9", label: "16:9", desc: "Landscape" },
+export const OUTPUT_FORMATS: { id: OutputFormat; label: string }[] = [
+  { id: "original", label: "Flat" },
+  { id: "9:16", label: "9:16 Reel" },
 ];
 
-export const MASKS: { id: MaskType; label: string }[] = [
-  { id: "none", label: "None" },
-  { id: "rounded", label: "Rounded" },
-  { id: "soft", label: "Soft" },
-  { id: "shadow-bottom", label: "Shadow Bottom" },
-  { id: "shadow-top-bottom", label: "Shadow T/B" },
-  { id: "rounded-square", label: "Rounded Square" },
+export const FRAME_TEMPLATES: {
+  id: FrameTemplate;
+  label: string;
+  desc: string;
+  videoWidthPct: number;
+  radiusPct: number;
+}[] = [
+  { id: "fill", label: "Fill", desc: "Crop to fill frame", videoWidthPct: 100, radiusPct: 0 },
+  { id: "cinema", label: "Cinema", desc: "Large with rounded corners", videoWidthPct: 92, radiusPct: 3 },
+  { id: "compact", label: "Compact", desc: "Medium centered frame", videoWidthPct: 76, radiusPct: 3.5 },
+  { id: "floating", label: "Floating", desc: "Small floating card", videoWidthPct: 60, radiusPct: 4 },
 ];
 
-export function getMaskCSS(mask: MaskType): CSSProperties {
-  switch (mask) {
-    case "rounded":
-      return { borderRadius: 20, overflow: "hidden" };
-    case "soft":
-      return {
-        maskImage: "radial-gradient(ellipse 70% 70% at center, black 60%, transparent 100%)",
-        WebkitMaskImage: "radial-gradient(ellipse 70% 70% at center, black 60%, transparent 100%)",
-      };
-    case "shadow-bottom":
-      return {
-        maskImage: "linear-gradient(to bottom, black 60%, transparent 100%)",
-        WebkitMaskImage: "linear-gradient(to bottom, black 60%, transparent 100%)",
-      };
-    case "shadow-top-bottom":
-      return {
-        maskImage: "linear-gradient(to bottom, transparent 0%, black 18%, black 82%, transparent 100%)",
-        WebkitMaskImage: "linear-gradient(to bottom, transparent 0%, black 18%, black 82%, transparent 100%)",
-      };
-    case "rounded-square":
-      return { borderRadius: "12%", overflow: "hidden" };
-    default:
-      return {};
-  }
+export function getFrameConfig(frame: FrameTemplate) {
+  return FRAME_TEMPLATES.find((t) => t.id === frame) ?? FRAME_TEMPLATES[1];
 }
 
-export function getAspectCSS(ratio: AspectRatio): string | undefined {
-  switch (ratio) {
-    case "9:16": return "9/16";
-    case "1:1": return "1/1";
-    case "4:5": return "4/5";
-    case "16:9": return "16/9";
-    default: return undefined;
-  }
-}
-
-export function getAspectNumeric(ratio: AspectRatio): number | null {
-  switch (ratio) {
-    case "9:16": return 9 / 16;
-    case "1:1": return 1;
-    case "4:5": return 4 / 5;
-    case "16:9": return 16 / 9;
-    default: return null;
-  }
-}
+// Output resolution for 9:16 reel
+export const REEL_WIDTH = 1080;
+export const REEL_HEIGHT = 1920;

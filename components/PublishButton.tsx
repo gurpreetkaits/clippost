@@ -22,6 +22,8 @@ interface PublishButtonProps {
   videoTitle?: string;
   clipDuration?: number;
   disabled?: boolean;
+  /** Called before publishing to regenerate clip with layout. Returns final clipFilename. */
+  prepareClip?: () => Promise<string>;
 }
 
 export default function PublishButton({
@@ -29,6 +31,7 @@ export default function PublishButton({
   videoTitle,
   clipDuration,
   disabled,
+  prepareClip,
 }: PublishButtonProps) {
   const [open, setOpen] = useState(false);
   const [status, setStatus] = useState<
@@ -93,13 +96,16 @@ export default function PublishButton({
     const newResults: { instagram?: string; youtube?: string } = {};
 
     try {
+      // Regenerate clip with layout if prepareClip is provided
+      const finalFilename = prepareClip ? await prepareClip() : clipFilename;
+
       // Publish to Instagram
       if (publishTo.instagram && selectedAccountId) {
         const res = await fetch("/api/publish", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            clipFilename,
+            clipFilename: finalFilename,
             caption,
             accountId: selectedAccountId,
           }),
@@ -115,7 +121,7 @@ export default function PublishButton({
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            clipFilename,
+            clipFilename: finalFilename,
             title: videoTitle || "New Short",
             description: caption,
             channelId: selectedYtChannel,

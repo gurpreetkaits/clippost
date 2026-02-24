@@ -3,7 +3,7 @@ import { promisify } from "util";
 import path from "path";
 import fs from "fs";
 import { CaptionStyle, DEFAULT_CAPTION_STYLE } from "./caption-style";
-import { VideoLayout, getAspectNumeric, MaskType } from "./video-layout";
+import { VideoLayout, getFrameConfig, REEL_WIDTH, REEL_HEIGHT } from "./video-layout";
 
 export type { CaptionStyle };
 export { DEFAULT_CAPTION_STYLE };
@@ -227,43 +227,10 @@ export async function extractAudio(
   return outputPath;
 }
 
-function buildCropFilter(
-  srcWidth: number,
-  srcHeight: number,
-  targetRatio: number
-): string | null {
-  const srcRatio = srcWidth / srcHeight;
-  if (Math.abs(srcRatio - targetRatio) < 0.01) return null;
-
-  if (srcRatio > targetRatio) {
-    // Source is wider — crop sides
-    return `crop=ih*${targetRatio}:ih`;
-  } else {
-    // Source is taller — crop top/bottom
-    return `crop=iw:iw/${targetRatio}`;
-  }
-}
-
-function buildMaskFilter(mask: MaskType): string | null {
-  switch (mask) {
-    case "rounded":
-      // R = 8% of min(W,H) — rounded corners
-      return "geq=lum='p(X,Y)':cb='p(X,Y)':cr='p(X,Y)':a='if(gt(abs(X-W/2),W/2-min(W,H)*0.08)*gt(abs(Y-H/2),H/2-min(W,H)*0.08),if(lte(hypot(abs(X-W/2)-(W/2-min(W,H)*0.08),abs(Y-H/2)-(H/2-min(W,H)*0.08)),min(W,H)*0.08),255,0),255)'";
-    case "soft":
-      // Radial vignette fade
-      return "geq=lum='p(X,Y)':cb='p(X,Y)':cr='p(X,Y)':a='clip(255*(1-pow(hypot((X-W/2)/(W*0.42),(Y-H/2)/(H*0.42)),4)),0,255)'";
-    case "shadow-bottom":
-      // Fade to transparent at bottom 40%
-      return "geq=lum='p(X,Y)':cb='p(X,Y)':cr='p(X,Y)':a='clip(255*min(1,(H-Y)/(H*0.4)),0,255)'";
-    case "shadow-top-bottom":
-      // Fade to transparent at top and bottom 18%
-      return "geq=lum='p(X,Y)':cb='p(X,Y)':cr='p(X,Y)':a='clip(255*min(min(1,Y/(H*0.18)),min(1,(H-Y)/(H*0.18))),0,255)'";
-    case "rounded-square":
-      // R = 12% of min(W,H) — squircle / rounded square
-      return "geq=lum='p(X,Y)':cb='p(X,Y)':cr='p(X,Y)':a='if(gt(abs(X-W/2),W/2-min(W,H)*0.12)*gt(abs(Y-H/2),H/2-min(W,H)*0.12),if(lte(hypot(abs(X-W/2)-(W/2-min(W,H)*0.12),abs(Y-H/2)-(H/2-min(W,H)*0.12)),min(W,H)*0.12),255,0),255)'";
-    default:
-      return null;
-  }
+// Build rounded-corner geq filter with a specific pixel radius
+function buildRoundedCornersGeq(radiusPx: number): string {
+  const R = radiusPx;
+  return `geq=lum='p(X,Y)':cb='p(X,Y)':cr='p(X,Y)':a='if(gt(abs(X-W/2),W/2-${R})*gt(abs(Y-H/2),H/2-${R}),if(lte(hypot(abs(X-W/2)-(W/2-${R}),abs(Y-H/2)-(H/2-${R})),${R}),255,0),255)'`;
 }
 
 export async function createClipWithCaptions(
@@ -280,23 +247,17 @@ export async function createClipWithCaptions(
   const outputPath = path.join(userDir, outputFilename);
   const duration = end - start;
 
-  // Get video dimensions for ASS scaling
   const { width, height } = await getVideoDimensions(videoPath);
 
-  // Compute post-crop dimensions for ASS subtitle scaling
-  const targetRatio = layout?.aspectRatio ? getAspectNumeric(layout.aspectRatio) : null;
-  let assWidth = width;
-  let assHeight = height;
-  if (targetRatio) {
-    const srcRatio = width / height;
-    if (srcRatio > targetRatio) {
-      assWidth = Math.round(height * targetRatio);
-    } else if (srcRatio < targetRatio) {
-      assHeight = Math.round(width / targetRatio);
-    }
-  }
+  const is916 = layout?.format === "9:16";
+  const frameConfig = is916 ? getFrameConfig(layout.frame) : null;
+  const isFrameMode = is916 && frameConfig && frameConfig.id !== "fill";
 
-  // Generate ASS subtitle file
+  // For frame modes, burn ASS onto the source video first so captions stay
+  // inside the video area. For fill/original, ASS matches the final output.
+  const assWidth = isFrameMode ? width : (is916 ? REEL_WIDTH : width);
+  const assHeight = isFrameMode ? height : (is916 ? REEL_HEIGHT : height);
+
   const assContent = generateAssContent(captions, start, assWidth, assHeight, style);
   const assPath = path.join(
     userDir,
@@ -304,42 +265,56 @@ export async function createClipWithCaptions(
   );
   fs.writeFileSync(assPath, assContent);
 
-  console.log("ASS content:\n", assContent);
-
-  // Escape the ASS path for ffmpeg filter syntax (colons, backslashes)
   const escapedAssPath = assPath
     .replace(/\\/g, "\\\\")
     .replace(/:/g, "\\:");
 
-  // Build filter chain
-  const vfParts: string[] = [];
-
-  // 1. Crop for aspect ratio
-  if (targetRatio) {
-    const cropFilter = buildCropFilter(width, height, targetRatio);
-    if (cropFilter) vfParts.push(cropFilter);
-  }
-
-  // 2. Scale to even dimensions
-  vfParts.push("scale=trunc(iw/2)*2:trunc(ih/2)*2");
-
-  // 3. ASS subtitle burn
-  vfParts.push(`ass=${escapedAssPath}`);
-
-  // 4. Mask (needs alpha channel + overlay onto black)
-  const maskGeq = layout?.mask ? buildMaskFilter(layout.mask) : null;
-  const useMask = !!maskGeq;
-
   try {
     let ffmpegArgs: string[];
 
-    if (useMask) {
-      // Use filter_complex: apply crop/scale/ass, then mask, then flatten onto black
-      const preChain = vfParts.join(",");
+    if (is916 && frameConfig && frameConfig.id === "fill") {
+      // 9:16 Fill: crop center to 9:16 ratio, then scale to 1080x1920
+      const targetRatio = REEL_WIDTH / REEL_HEIGHT; // 0.5625
+      const srcRatio = width / height;
+      let cropFilter: string;
+      if (Math.abs(srcRatio - targetRatio) < 0.01) {
+        cropFilter = "";
+      } else if (srcRatio > targetRatio) {
+        cropFilter = `crop=ih*${targetRatio}:ih,`;
+      } else {
+        cropFilter = `crop=iw:iw/${targetRatio},`;
+      }
+
+      ffmpegArgs = [
+        "-y",
+        "-ss", start.toString(),
+        "-i", videoPath,
+        "-t", duration.toString(),
+        "-vf", `${cropFilter}scale=${REEL_WIDTH}:${REEL_HEIGHT},ass=${escapedAssPath}`,
+        "-c:v", "libx264",
+        "-preset", "fast",
+        "-crf", "23",
+        "-c:a", "aac",
+        "-b:a", "128k",
+        "-movflags", "+faststart",
+        outputPath,
+      ];
+    } else if (isFrameMode && frameConfig) {
+      // 9:16 Frame template: burn captions on video first, then scale, round corners, overlay on black canvas
+      const scaledW = Math.round((REEL_WIDTH * frameConfig.videoWidthPct) / 100 / 2) * 2;
+      const radiusPx = Math.round(scaledW * frameConfig.radiusPct / 100);
+
+      let videoChain: string;
+      if (radiusPx > 0) {
+        videoChain = `[0:v]ass=${escapedAssPath},scale=${scaledW}:-2,format=yuva420p,${buildRoundedCornersGeq(radiusPx)}[vid]`;
+      } else {
+        videoChain = `[0:v]ass=${escapedAssPath},scale=${scaledW}:-2[vid]`;
+      }
+
       const filterComplex = [
-        `[0:v]${preChain},format=yuva420p,${maskGeq}[masked]`,
-        `color=black:s=2x2[bg]`,
-        `[bg][masked]overlay=(W-w)/2:(H-h)/2:shortest=1`,
+        videoChain,
+        `color=black:s=${REEL_WIDTH}x${REEL_HEIGHT}[bg]`,
+        `[bg][vid]overlay=(W-w)/2:(H-h)/2:shortest=1`,
       ].join(";");
 
       ffmpegArgs = [
@@ -357,13 +332,13 @@ export async function createClipWithCaptions(
         outputPath,
       ];
     } else {
-      // Simple -vf chain
+      // Original format: just encode with even dimensions + subtitles
       ffmpegArgs = [
         "-y",
         "-ss", start.toString(),
         "-i", videoPath,
         "-t", duration.toString(),
-        "-vf", vfParts.join(","),
+        "-vf", `scale=trunc(iw/2)*2:trunc(ih/2)*2,ass=${escapedAssPath}`,
         "-c:v", "libx264",
         "-preset", "fast",
         "-crf", "23",
@@ -376,7 +351,6 @@ export async function createClipWithCaptions(
 
     await execFileAsync("ffmpeg", ffmpegArgs, { timeout: 300000 });
   } finally {
-    // Clean up temp ASS file
     if (fs.existsSync(assPath)) fs.unlinkSync(assPath);
   }
 

@@ -19,16 +19,24 @@ import {
   RefreshCw,
   Film,
   CheckCircle2,
+  MessageSquarePlus,
 } from "lucide-react";
 import { CaptionStyle, DEFAULT_CAPTION_STYLE } from "@/lib/caption-style";
 import {
   VideoLayout,
   DEFAULT_LAYOUT,
-  ASPECT_RATIOS,
-  MASKS,
-  getMaskCSS,
-  getAspectCSS,
+  OUTPUT_FORMATS,
+  FRAME_TEMPLATES,
+  getFrameConfig,
 } from "@/lib/video-layout";
+import { LANGUAGES } from "@/lib/languages";
+
+interface CaptionSegment {
+  start: number;
+  end: number;
+  text: string;
+  words?: { word: string; start: number; end: number }[];
+}
 
 const VideoPlayer = dynamic(() => import("@/components/VideoPlayer"), {
   ssr: false,
@@ -70,9 +78,13 @@ export default function ClipEditorPage() {
   // Editor state
   const [captionStyle, setCaptionStyle] = useState<CaptionStyle>(DEFAULT_CAPTION_STYLE);
   const [layout, setLayout] = useState<VideoLayout>(DEFAULT_LAYOUT);
+  const [language, setLanguage] = useState("en");
+  const [captions, setCaptions] = useState<CaptionSegment[]>([]);
+  const [transcribing, setTranscribing] = useState(false);
   const [playing, setPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [generating, setGenerating] = useState(false);
+  const [downloading, setDownloading] = useState(false);
 
   // Fetch clip on mount
   useEffect(() => {
@@ -106,6 +118,33 @@ export default function ClipEditorPage() {
 
   const videoContainerRef = useRef<HTMLDivElement>(null);
 
+  const handleGenerateCaptions = useCallback(async () => {
+    if (!clip?.video) return;
+    setTranscribing(true);
+    setError("");
+
+    try {
+      const response = await fetch("/api/transcribe", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          filename: clip.video.filename,
+          start: clip.startTime,
+          end: clip.endTime,
+          language,
+        }),
+      });
+
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Transcription failed");
+      setCaptions(data.segments);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Transcription failed");
+    } finally {
+      setTranscribing(false);
+    }
+  }, [clip, language]);
+
   const handleRegenerateClip = useCallback(async () => {
     if (!clip?.video) return;
     setGenerating(true);
@@ -119,7 +158,7 @@ export default function ClipEditorPage() {
           filename: clip.video.filename,
           start: clip.startTime,
           end: clip.endTime,
-          captions: [],
+          captions,
           style: captionStyle,
           layout,
         }),
@@ -135,7 +174,45 @@ export default function ClipEditorPage() {
     } finally {
       setGenerating(false);
     }
-  }, [clip, captionStyle, layout]);
+  }, [clip, captions, captionStyle, layout]);
+
+  // Regenerate clip and return the new filename (used by download + publish)
+  const prepareClip = useCallback(async (): Promise<string> => {
+    if (!clip?.video) throw new Error("No video data");
+
+    const response = await fetch("/api/clip", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        filename: clip.video.filename,
+        start: clip.startTime,
+        end: clip.endTime,
+        captions,
+        style: captionStyle,
+        layout,
+      }),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "Clip generation failed");
+    setClipFilename(data.clipFilename);
+    return data.clipFilename;
+  }, [clip, captions, captionStyle, layout]);
+
+  const handleDownload = useCallback(async () => {
+    setDownloading(true);
+    setError("");
+    try {
+      const filename = await prepareClip();
+      const link = document.createElement("a");
+      link.href = `/api/video?file=${encodeURIComponent(filename)}`;
+      link.download = `clip_${clip?.video?.filename || clip?.filename || "video"}`;
+      link.click();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Download failed");
+    } finally {
+      setDownloading(false);
+    }
+  }, [prepareClip, clip]);
 
   // Loading state
   if (loading) {
@@ -211,28 +288,48 @@ export default function ClipEditorPage() {
                 </div>
                 <div
                   ref={videoContainerRef}
-                  className="relative mx-auto bg-black"
-                  style={{
-                    ...(getAspectCSS(layout.aspectRatio)
-                      ? { aspectRatio: getAspectCSS(layout.aspectRatio), maxHeight: "65vh" }
-                      : {}),
-                    overflow: "hidden",
-                    ...getMaskCSS(layout.mask),
-                  }}
+                  className={`relative ${layout.format === "9:16" ? "mx-auto bg-black" : ""}`}
+                  style={
+                    layout.format === "9:16"
+                      ? {
+                          aspectRatio: "9/16",
+                          maxHeight: "65vh",
+                          overflow: "hidden",
+                          ...(layout.frame !== "fill"
+                            ? { display: "flex", alignItems: "center", justifyContent: "center" }
+                            : {}),
+                        }
+                      : {}
+                  }
                 >
-                  <VideoPlayer
-                    key={clipFilename}
-                    url={clipUrl}
-                    start={0}
-                    end={clipDuration}
-                    playing={playing}
-                    onProgress={setCurrentTime}
-                    style={
-                      getAspectCSS(layout.aspectRatio)
-                        ? { objectFit: "cover" as const, width: "100%", height: "100%" }
-                        : undefined
-                    }
-                  />
+                  {layout.format === "9:16" && layout.frame !== "fill" ? (
+                    <div
+                      style={{
+                        width: `${getFrameConfig(layout.frame).videoWidthPct}%`,
+                        borderRadius: `${getFrameConfig(layout.frame).radiusPct}%`,
+                        overflow: "hidden",
+                      }}
+                    >
+                      <VideoPlayer
+                        key={clipFilename}
+                        url={clipUrl}
+                        start={0}
+                        end={clipDuration}
+                        playing={playing}
+                        onProgress={setCurrentTime}
+                      />
+                    </div>
+                  ) : (
+                    <VideoPlayer
+                      key={clipFilename}
+                      url={clipUrl}
+                      start={0}
+                      end={clipDuration}
+                      playing={playing}
+                      onProgress={setCurrentTime}
+                      fill={layout.format === "9:16"}
+                    />
+                  )}
                 </div>
               </div>
 
@@ -265,42 +362,102 @@ export default function ClipEditorPage() {
                 </CardHeader>
                 <CardContent className="space-y-4">
                   <div>
-                    <p className="text-xs text-muted-foreground mb-2">Aspect Ratio</p>
-                    <div className="flex flex-wrap gap-1.5">
-                      {ASPECT_RATIOS.map((r) => (
+                    <p className="text-xs text-muted-foreground mb-2">Format</p>
+                    <div className="flex gap-1.5">
+                      {OUTPUT_FORMATS.map((f) => (
                         <button
-                          key={r.id}
-                          onClick={() => setLayout((l) => ({ ...l, aspectRatio: r.id }))}
-                          className={`px-2.5 py-1 text-xs rounded-md border transition-colors ${
-                            layout.aspectRatio === r.id
-                              ? "bg-primary text-primary-foreground border-primary"
-                              : "bg-muted/50 text-muted-foreground border-border hover:bg-muted"
-                          }`}
-                          title={r.desc}
-                        >
-                          {r.label}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                  <div>
-                    <p className="text-xs text-muted-foreground mb-2">Mask</p>
-                    <div className="flex flex-wrap gap-1.5">
-                      {MASKS.map((m) => (
-                        <button
-                          key={m.id}
-                          onClick={() => setLayout((l) => ({ ...l, mask: m.id }))}
-                          className={`px-2.5 py-1 text-xs rounded-md border transition-colors ${
-                            layout.mask === m.id
+                          key={f.id}
+                          onClick={() => setLayout((l) => ({ ...l, format: f.id }))}
+                          className={`px-3 py-1.5 text-xs rounded-md border transition-colors ${
+                            layout.format === f.id
                               ? "bg-primary text-primary-foreground border-primary"
                               : "bg-muted/50 text-muted-foreground border-border hover:bg-muted"
                           }`}
                         >
-                          {m.label}
+                          {f.label}
                         </button>
                       ))}
                     </div>
                   </div>
+                  {layout.format === "9:16" && (
+                    <div>
+                      <p className="text-xs text-muted-foreground mb-2">Frame</p>
+                      <div className="flex flex-wrap gap-1.5">
+                        {FRAME_TEMPLATES.map((t) => (
+                          <button
+                            key={t.id}
+                            onClick={() => setLayout((l) => ({ ...l, frame: t.id }))}
+                            className={`px-2.5 py-1 text-xs rounded-md border transition-colors ${
+                              layout.frame === t.id
+                                ? "bg-primary text-primary-foreground border-primary"
+                                : "bg-muted/50 text-muted-foreground border-border hover:bg-muted"
+                            }`}
+                            title={t.desc}
+                          >
+                            {t.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+
+              {/* Captions */}
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm">Captions</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  <div className="flex items-center gap-2">
+                    <select
+                      value={language}
+                      onChange={(e) => setLanguage(e.target.value)}
+                      disabled={transcribing}
+                      className="flex-1 rounded-md border border-input bg-background px-2.5 py-1.5 text-xs"
+                    >
+                      {LANGUAGES.map((l) => (
+                        <option key={l.code} value={l.code}>{l.label}</option>
+                      ))}
+                    </select>
+                    <Button
+                      size="sm"
+                      onClick={handleGenerateCaptions}
+                      disabled={transcribing || !clip.video?.fileExists}
+                    >
+                      {transcribing ? (
+                        <>
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          Generating...
+                        </>
+                      ) : (
+                        <>
+                          <MessageSquarePlus className="h-3.5 w-3.5" />
+                          Generate Captions
+                        </>
+                      )}
+                    </Button>
+                  </div>
+                  {captions.length > 0 && (
+                    <div className="text-xs text-muted-foreground space-y-1 max-h-40 overflow-y-auto rounded border p-2">
+                      {captions.map((seg, i) => (
+                        <div key={i} className="flex gap-2">
+                          <span className="text-muted-foreground/60 shrink-0 tabular-nums">
+                            {formatTimestamp(seg.start)}
+                          </span>
+                          <span>{seg.text}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {captions.length > 0 && (
+                    <button
+                      onClick={() => setCaptions([])}
+                      className="text-xs text-muted-foreground hover:text-foreground transition-colors"
+                    >
+                      Clear captions
+                    </button>
+                  )}
                 </CardContent>
               </Card>
 
@@ -329,21 +486,33 @@ export default function ClipEditorPage() {
 
               {/* Download + Publish */}
               <div className="flex gap-2">
-                <a
-                  href={clipUrl}
-                  download={`clip_${clip.video?.filename || clip.filename}`}
-                  className="flex-1"
-                >
-                  <Button variant="outline" size="lg" className="w-full">
-                    <Download className="h-4 w-4 mr-1" />
-                    Download
+                <div className="flex-1">
+                  <Button
+                    variant="outline"
+                    size="lg"
+                    className="w-full"
+                    onClick={handleDownload}
+                    disabled={downloading || !clip.video?.fileExists}
+                  >
+                    {downloading ? (
+                      <>
+                        <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+                        Preparing...
+                      </>
+                    ) : (
+                      <>
+                        <Download className="h-4 w-4 mr-1" />
+                        Download
+                      </>
+                    )}
                   </Button>
-                </a>
+                </div>
                 <div className="flex-1">
                   <PublishButton
                     clipFilename={clipFilename}
                     videoTitle={videoTitle}
                     clipDuration={clipDuration}
+                    prepareClip={prepareClip}
                   />
                 </div>
               </div>

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { extractAudio, cleanup } from "@/lib/ffmpeg";
 import { transcribeAudio } from "@/lib/whisper";
+import { transcribeAudioSarvam } from "@/lib/sarvam";
 import { getVideoPath } from "@/lib/youtube";
 import { requireAuth } from "@/lib/auth";
 
@@ -12,7 +13,7 @@ export async function POST(request: NextRequest) {
   let audioPath: string | null = null;
 
   try {
-    const { filename, start, end } = await request.json();
+    const { filename, start, end, language } = await request.json();
 
     if (!filename || start === undefined || end === undefined) {
       return NextResponse.json(
@@ -31,7 +32,10 @@ export async function POST(request: NextRequest) {
     const videoPath = getVideoPath(userId, filename);
     audioPath = await extractAudio(userId, videoPath, start, end);
 
-    const segments = await transcribeAudio(audioPath);
+    const useSarvam = language && language !== "en";
+    const segments = useSarvam
+      ? await transcribeAudioSarvam(audioPath, language)
+      : await transcribeAudio(audioPath);
 
     // Offset timestamps relative to clip start (including word-level)
     const offsetSegments = segments.map((seg) => ({
