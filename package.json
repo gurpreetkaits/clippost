@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "mcp": "npx tsx mcp-server.ts"
   },
   "dependencies": {
     "@polar-sh/sdk": "^0.43.1",

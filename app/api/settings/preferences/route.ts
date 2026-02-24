@@ -1,11 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
-import { requireAuth } from "@/lib/auth";
+import { requireAuth, authenticateApiKey } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 
-export async function GET() {
+export async function GET(request: NextRequest) {
+  let userId: string;
   const authResult = await requireAuth();
-  if (authResult instanceof NextResponse) return authResult;
-  const { userId } = authResult;
+  if (authResult instanceof NextResponse) {
+    const apiKeyAuth = await authenticateApiKey(request);
+    if (!apiKeyAuth) return authResult;
+    userId = apiKeyAuth.userId;
+  } else {
+    userId = authResult.userId;
+  }
 
   const user = await prisma.user.findUnique({
     where: { id: userId },
@@ -13,6 +19,10 @@ export async function GET() {
       autoPostInstagram: true,
       autoPostYoutube: true,
       useAiCaptions: true,
+      defaultLanguage: true,
+      defaultFormat: true,
+      defaultFrame: true,
+      autonomousMode: true,
     },
   });
 
@@ -20,6 +30,10 @@ export async function GET() {
     autoPostInstagram: false,
     autoPostYoutube: false,
     useAiCaptions: true,
+    defaultLanguage: "en",
+    defaultFormat: "original",
+    defaultFrame: "cinema",
+    autonomousMode: false,
   });
 }
 
@@ -29,7 +43,7 @@ export async function PUT(request: NextRequest) {
   const { userId } = authResult;
 
   const body = await request.json();
-  const data: Record<string, boolean> = {};
+  const data: Record<string, boolean | string> = {};
 
   if (typeof body.autoPostInstagram === "boolean")
     data.autoPostInstagram = body.autoPostInstagram;
@@ -37,6 +51,14 @@ export async function PUT(request: NextRequest) {
     data.autoPostYoutube = body.autoPostYoutube;
   if (typeof body.useAiCaptions === "boolean")
     data.useAiCaptions = body.useAiCaptions;
+  if (typeof body.defaultLanguage === "string")
+    data.defaultLanguage = body.defaultLanguage;
+  if (typeof body.defaultFormat === "string")
+    data.defaultFormat = body.defaultFormat;
+  if (typeof body.defaultFrame === "string")
+    data.defaultFrame = body.defaultFrame;
+  if (typeof body.autonomousMode === "boolean")
+    data.autonomousMode = body.autonomousMode;
 
   const updated = await prisma.user.update({
     where: { id: userId },
@@ -45,6 +67,10 @@ export async function PUT(request: NextRequest) {
       autoPostInstagram: true,
       autoPostYoutube: true,
       useAiCaptions: true,
+      defaultLanguage: true,
+      defaultFormat: true,
+      defaultFrame: true,
+      autonomousMode: true,
     },
   });
 

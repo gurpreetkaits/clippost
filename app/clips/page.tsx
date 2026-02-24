@@ -90,7 +90,7 @@ export default function ClipsPage() {
 
   return (
     <div className="min-h-screen p-4 md:p-8">
-      <div className="max-w-3xl mx-auto space-y-6">
+      <div className="max-w-6xl mx-auto space-y-6">
         <div className="flex items-center gap-3">
           <Link href="/">
             <Button variant="ghost" size="sm" className="text-muted-foreground">
@@ -113,69 +113,57 @@ export default function ClipsPage() {
             </Link>
           </div>
         ) : (
-          <div className="space-y-3">
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
             {clips.map((clip) => (
-              <Card key={clip.id} className="overflow-hidden">
-                <div className="flex gap-4 p-4">
-                  {clip.video?.thumbnail && (
-                    <div className="relative w-36 h-20 rounded-md overflow-hidden bg-muted flex-shrink-0">
-                      <Image
-                        src={clip.video.thumbnail}
-                        alt={clip.video.title || "Video thumbnail"}
-                        fill
-                        className="object-cover"
-                        unoptimized
-                      />
-                    </div>
-                  )}
-                  <div className="flex-1 min-w-0 space-y-1.5">
-                    <p className="text-sm font-medium truncate">
-                      {clip.video?.title || "Untitled"}
-                    </p>
-                    <div className="flex flex-wrap items-center gap-1.5">
-                      <Badge variant="outline" className="text-xs gap-1">
-                        <Clock className="h-3 w-3" />
-                        {formatTimestamp(clip.startTime)}&ndash;{formatTimestamp(clip.endTime)}
-                      </Badge>
-                      <Badge variant="secondary" className="text-xs gap-1">
-                        {clip.method === "AUTO_TRIM" ? (
-                          <><Sparkles className="h-3 w-3" /> Auto</>
-                        ) : (
-                          <><Film className="h-3 w-3" /> Manual</>
-                        )}
-                      </Badge>
-                      {clip.hasCaptions && (
-                        <Badge variant="outline" className="text-xs">
-                          Captions
-                        </Badge>
-                      )}
-                      {clip.publishedAt && (
-                        <Badge variant="default" className="text-xs gap-1">
-                          <Instagram className="h-3 w-3" /> Published
-                        </Badge>
-                      )}
-                      {clip.youtubeVideoId && (
-                        <Badge variant="default" className="text-xs gap-1">
-                          <Youtube className="h-3 w-3" /> YouTube
-                        </Badge>
-                      )}
-                    </div>
-                    <div className="flex items-center gap-3 text-xs text-muted-foreground">
-                      <span>{new Date(clip.createdAt).toLocaleDateString()}</span>
-                      <span>{Math.round(clip.duration)}s clip</span>
-                      {clip.video && (
-                        <a
-                          href={clip.video.sourceUrl}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="hover:text-foreground transition-colors"
-                        >
-                          Source ({formatTimestamp(clip.video.duration)})
-                        </a>
-                      )}
-                    </div>
+              <Card key={clip.id} className="overflow-hidden flex flex-col">
+                {clip.video?.thumbnail && (
+                  <div className="relative w-full aspect-video bg-muted">
+                    <Image
+                      src={clip.video.thumbnail}
+                      alt={clip.video.title || "Video thumbnail"}
+                      fill
+                      className="object-cover"
+                      unoptimized
+                    />
                   </div>
-                  <div className="flex flex-col gap-1 flex-shrink-0 self-center">
+                )}
+                <div className="p-4 flex flex-col flex-1 gap-2">
+                  <p className="text-sm font-medium truncate">
+                    {clip.video?.title || "Untitled"}
+                  </p>
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <Badge variant="outline" className="text-xs gap-1">
+                      <Clock className="h-3 w-3" />
+                      {formatTimestamp(clip.startTime)}&ndash;{formatTimestamp(clip.endTime)}
+                    </Badge>
+                    <Badge variant="secondary" className="text-xs gap-1">
+                      {clip.method === "AUTO_TRIM" ? (
+                        <><Sparkles className="h-3 w-3" /> Auto</>
+                      ) : (
+                        <><Film className="h-3 w-3" /> Manual</>
+                      )}
+                    </Badge>
+                    {clip.hasCaptions && (
+                      <Badge variant="outline" className="text-xs">
+                        Captions
+                      </Badge>
+                    )}
+                    {clip.publishedAt && (
+                      <Badge variant="default" className="text-xs gap-1">
+                        <Instagram className="h-3 w-3" /> Published
+                      </Badge>
+                    )}
+                    {clip.youtubeVideoId && (
+                      <Badge variant="default" className="text-xs gap-1">
+                        <Youtube className="h-3 w-3" /> YouTube
+                      </Badge>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-3 text-xs text-muted-foreground">
+                    <span>{new Date(clip.createdAt).toLocaleDateString()}</span>
+                    <span>{Math.round(clip.duration)}s clip</span>
+                  </div>
+                  <div className="flex items-center gap-1 mt-auto pt-2 border-t border-border">
                     <a
                       href={`/api/video?file=${encodeURIComponent(clip.filename)}`}
                       download
@@ -192,34 +180,47 @@ export default function ClipsPage() {
                     >
                       <Pencil className="h-4 w-4" />
                     </Button>
-                    {plan === "PRO" ? (
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        title="Delete clip"
-                        onClick={() => handleDelete(clip.id)}
-                        disabled={deleting === clip.id}
-                        className="text-destructive hover:text-destructive"
+                    {clip.video && (
+                      <a
+                        href={clip.video.sourceUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
                       >
-                        {deleting === clip.id ? (
-                          <Loader2 className="h-4 w-4 animate-spin" />
-                        ) : (
-                          <Trash2 className="h-4 w-4" />
-                        )}
-                      </Button>
-                    ) : (
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        title="Upgrade to Pro to delete clips"
-                        className="text-muted-foreground"
-                        asChild
-                      >
-                        <Link href="/pricing">
-                          <Trash2 className="h-4 w-4" />
-                        </Link>
-                      </Button>
+                        <Button variant="ghost" size="sm" title="View source">
+                          <Youtube className="h-4 w-4" />
+                        </Button>
+                      </a>
                     )}
+                    <div className="ml-auto">
+                      {plan === "PRO" ? (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          title="Delete clip"
+                          onClick={() => handleDelete(clip.id)}
+                          disabled={deleting === clip.id}
+                          className="text-destructive hover:text-destructive"
+                        >
+                          {deleting === clip.id ? (
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                          ) : (
+                            <Trash2 className="h-4 w-4" />
+                          )}
+                        </Button>
+                      ) : (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          title="Upgrade to Pro to delete clips"
+                          className="text-muted-foreground"
+                          asChild
+                        >
+                          <Link href="/pricing">
+                            <Trash2 className="h-4 w-4" />
+                          </Link>
+                        </Button>
+                      )}
+                    </div>
                   </div>
                 </div>
               </Card>

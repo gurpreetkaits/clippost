@@ -22,7 +22,7 @@ export async function POST(request: NextRequest) {
   }
   const { userId } = authResult;
 
-  let body: { url: string; purpose: string; generateCaptions: boolean; language?: string };
+  let body: { url: string; purpose?: string; generateCaptions: boolean; language?: string };
   try {
     body = await request.json();
   } catch {
@@ -33,10 +33,6 @@ export async function POST(request: NextRequest) {
 
   if (!url || !isValidYouTubeUrl(url)) {
     return NextResponse.json({ error: "Invalid YouTube URL" }, { status: 400 });
-  }
-
-  if (!purpose || purpose.trim().length === 0) {
-    return NextResponse.json({ error: "Purpose is required" }, { status: 400 });
   }
 
   const usageCheck = await checkUsageLimit(userId, "CLIP_CREATED");
@@ -102,7 +98,7 @@ export async function POST(request: NextRequest) {
         progress("analyzing", "Finding best segment...", 67);
         const bestSegment = await findBestSegment(
           segments,
-          purpose,
+          purpose || undefined,
           metadata.duration
         );
         progress("analyzing", `Found segment: ${bestSegment.reason}`, 75);

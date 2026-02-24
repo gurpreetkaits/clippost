@@ -27,6 +27,15 @@ model User {
   autoPostYoutube   Boolean @default(false)
   useAiCaptions     Boolean @default(true)
 
+  // Defaults
+  defaultLanguage String  @default("en")
+  defaultFormat   String  @default("original")
+  defaultFrame    String  @default("cinema")
+  autonomousMode  Boolean @default(false)
+
+  // API access
+  apiKey          String? @unique
+
   instagramAccounts InstagramAccount[]
   youtubeChannels   YouTubeChannel[]
   videos            Video[]

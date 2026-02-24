@@ -18,7 +18,11 @@ import {
   Loader2,
   Crown,
   Youtube,
+  Copy,
+  Key,
+  Bot,
 } from "lucide-react";
+import { LANGUAGES } from "@/lib/languages";
 
 interface AccountInfo {
   id: string;
@@ -53,6 +57,10 @@ interface Preferences {
   autoPostInstagram: boolean;
   autoPostYoutube: boolean;
   useAiCaptions: boolean;
+  defaultLanguage: string;
+  defaultFormat: string;
+  defaultFrame: string;
+  autonomousMode: boolean;
 }
 
 function UsageBar({ used, limit }: { used: number; limit: number }) {
@@ -128,7 +136,17 @@ function SettingsContent() {
     autoPostInstagram: false,
     autoPostYoutube: false,
     useAiCaptions: true,
+    defaultLanguage: "en",
+    defaultFormat: "original",
+    defaultFrame: "cinema",
+    autonomousMode: false,
   });
+  const [apiKeyInfo, setApiKeyInfo] = useState<{
+    hasKey: boolean;
+    maskedKey?: string;
+    fullKey?: string;
+  }>({ hasKey: false });
+  const [apiKeyLoading, setApiKeyLoading] = useState(false);
 
   const fetchAccounts = async () => {
     try {
@@ -171,12 +189,22 @@ function SettingsContent() {
     }
   };
 
+  const fetchApiKey = async () => {
+    try {
+      const res = await fetch("/api/settings/api-key");
+      const data = await res.json();
+      setApiKeyInfo(data);
+    } catch (err) {
+      console.error("Failed to fetch API key:", err);
+    }
+  };
+
   useEffect(() => {
     if (status !== "authenticated") {
       setLoading(false);
       return;
     }
-    Promise.all([fetchAccounts(), fetchYtChannels(), fetchUsage(), fetchPrefs()]).finally(
+    Promise.all([fetchAccounts(), fetchYtChannels(), fetchUsage(), fetchPrefs(), fetchApiKey()]).finally(
       () => setLoading(false)
     );
   }, [status]);
@@ -244,7 +272,8 @@ function SettingsContent() {
     }
   };
 
-  const updatePref = async (key: keyof Preferences, value: boolean) => {
+  const updatePref = async (key: keyof Preferences, value: boolean | string) => {
+    const prev = prefs[key];
     setPrefs((p) => ({ ...p, [key]: value }));
     try {
       await fetch("/api/settings/preferences", {
@@ -254,7 +283,32 @@ function SettingsContent() {
       });
     } catch (err) {
       console.error("Failed to update preference:", err);
-      setPrefs((p) => ({ ...p, [key]: !value }));
+      setPrefs((p) => ({ ...p, [key]: prev }));
+    }
+  };
+
+  const generateApiKey = async () => {
+    setApiKeyLoading(true);
+    try {
+      const res = await fetch("/api/settings/api-key", { method: "POST" });
+      const data = await res.json();
+      setApiKeyInfo({ hasKey: true, maskedKey: undefined, fullKey: data.apiKey });
+    } catch (err) {
+      console.error("Failed to generate API key:", err);
+    } finally {
+      setApiKeyLoading(false);
+    }
+  };
+
+  const revokeApiKey = async () => {
+    setApiKeyLoading(true);
+    try {
+      await fetch("/api/settings/api-key", { method: "DELETE" });
+      setApiKeyInfo({ hasKey: false });
+    } catch (err) {
+      console.error("Failed to revoke API key:", err);
+    } finally {
+      setApiKeyLoading(false);
     }
   };
 
@@ -394,6 +448,71 @@ function SettingsContent() {
           </CardContent>
         </Card>
 
+        {/* Clip Defaults Card */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Clip Defaults</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="space-y-2">
+              <Label className="text-sm">Default Language</Label>
+              <select
+                value={prefs.defaultLanguage}
+                onChange={(e) => updatePref("defaultLanguage", e.target.value)}
+                className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+              >
+                {LANGUAGES.map((lang) => (
+                  <option key={lang.code} value={lang.code}>
+                    {lang.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <Separator />
+            <div className="space-y-2">
+              <Label className="text-sm">Default Format</Label>
+              <div className="flex gap-2">
+                {(["original", "9:16"] as const).map((fmt) => (
+                  <button
+                    key={fmt}
+                    onClick={() => updatePref("defaultFormat", fmt)}
+                    className={`flex-1 rounded-md border px-3 py-1.5 text-sm transition-colors ${
+                      prefs.defaultFormat === fmt
+                        ? "border-primary bg-primary text-primary-foreground"
+                        : "border-input hover:bg-muted"
+                    }`}
+                  >
+                    {fmt === "original" ? "Original" : "9:16 Reel"}
+                  </button>
+                ))}
+              </div>
+            </div>
+            {prefs.defaultFormat === "9:16" && (
+              <>
+                <Separator />
+                <div className="space-y-2">
+                  <Label className="text-sm">Default Frame</Label>
+                  <div className="grid grid-cols-4 gap-2">
+                    {(["fill", "cinema", "compact", "floating"] as const).map((frame) => (
+                      <button
+                        key={frame}
+                        onClick={() => updatePref("defaultFrame", frame)}
+                        className={`rounded-md border px-2 py-1.5 text-xs capitalize transition-colors ${
+                          prefs.defaultFrame === frame
+                            ? "border-primary bg-primary text-primary-foreground"
+                            : "border-input hover:bg-muted"
+                        }`}
+                      >
+                        {frame}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </>
+            )}
+          </CardContent>
+        </Card>
+
         {/* Publishing Preferences Card */}
         <Card>
           <CardHeader>
@@ -426,6 +545,22 @@ function SettingsContent() {
               <Toggle
                 checked={prefs.useAiCaptions}
                 onChange={(v) => updatePref("useAiCaptions", v)}
+              />
+            </div>
+            <Separator />
+            <div className="flex items-center justify-between">
+              <div>
+                <Label className="text-sm flex items-center gap-1.5">
+                  <Bot className="h-4 w-4" />
+                  Autonomous Mode
+                </Label>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  AI handles everything: download, transcribe, pick segment, generate clip, and auto-publish
+                </p>
+              </div>
+              <Toggle
+                checked={prefs.autonomousMode}
+                onChange={(v) => updatePref("autonomousMode", v)}
               />
             </div>
           </CardContent>
@@ -591,6 +726,72 @@ function SettingsContent() {
                   );
                 })}
               </div>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* API Key Card */}
+        <Card>
+          <CardHeader>
+            <div className="flex items-center justify-between">
+              <CardTitle className="text-base flex items-center gap-1.5">
+                <Key className="h-4 w-4" />
+                API Key
+              </CardTitle>
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <p className="text-xs text-muted-foreground">
+              Use this key with the MCP server or chatbot integration.
+            </p>
+            {apiKeyInfo.fullKey ? (
+              <div className="space-y-2">
+                <div className="flex items-center gap-2">
+                  <code className="flex-1 rounded-md bg-muted px-3 py-2 text-xs font-mono break-all">
+                    {apiKeyInfo.fullKey}
+                  </code>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => {
+                      navigator.clipboard.writeText(apiKeyInfo.fullKey!);
+                    }}
+                    title="Copy to clipboard"
+                  >
+                    <Copy className="h-4 w-4" />
+                  </Button>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Copy this key now — it won&apos;t be shown again.
+                </p>
+              </div>
+            ) : apiKeyInfo.hasKey ? (
+              <div className="flex items-center gap-2">
+                <code className="flex-1 rounded-md bg-muted px-3 py-2 text-xs font-mono">
+                  {apiKeyInfo.maskedKey}
+                </code>
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  onClick={revokeApiKey}
+                  disabled={apiKeyLoading}
+                >
+                  Revoke
+                </Button>
+              </div>
+            ) : (
+              <Button
+                onClick={generateApiKey}
+                disabled={apiKeyLoading}
+                variant="outline"
+                className="w-full"
+              >
+                {apiKeyLoading ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  "Generate API Key"
+                )}
+              </Button>
             )}
           </CardContent>
         </Card>

@@ -13,7 +13,7 @@ export interface SegmentResult {
 
 export async function findBestSegment(
   segments: CaptionSegment[],
-  purpose: string,
+  purpose: string | undefined,
   videoDuration: number
 ): Promise<SegmentResult> {
   // For short videos (≤40s), return the full range
@@ -40,18 +40,29 @@ export async function findBestSegment(
     messages: [
       {
         role: "system",
-        content: `You are a video editor AI. Given a timestamped transcript and a user's purpose, find the single best continuous segment (15-60 seconds) that matches the purpose. The video is ${videoDuration} seconds long.
+        content: purpose
+          ? `You are a video editor AI. Given a timestamped transcript and a user's purpose, find the single best continuous segment (15-60 seconds) that matches the purpose. The video is ${videoDuration} seconds long.
 
 Return JSON with exactly these fields:
 - "start": number (seconds, must be >= 0)
 - "end": number (seconds, must be <= ${videoDuration})
 - "reason": string (1-2 sentence explanation of why this segment was chosen)
 
-The segment duration (end - start) must be between 15 and 60 seconds. Pick the most compelling, self-contained segment.`,
+The segment duration (end - start) must be between 15 and 60 seconds. Pick the most compelling, self-contained segment.`
+          : `You are a video editor AI. Find the single most compelling, viral-worthy continuous segment (15-60 seconds) from this transcript. The video is ${videoDuration} seconds long.
+
+Pick the part with the strongest hook, highest entertainment value, or most useful information. Prefer segments that start with an attention-grabbing moment.
+
+Return JSON with exactly these fields:
+- "start": number (seconds, must be >= 0)
+- "end": number (seconds, must be <= ${videoDuration})
+- "reason": string (1-2 sentence explanation of why this segment was chosen)
+
+The segment duration (end - start) must be between 15 and 60 seconds.`,
       },
       {
         role: "user",
-        content: `Purpose: ${purpose}\n\nTranscript:\n${transcript}`,
+        content: `${purpose ? `Purpose: ${purpose}\n\n` : ""}Transcript:\n${transcript}`,
       },
     ],
   });

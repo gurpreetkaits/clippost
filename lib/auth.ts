@@ -1,5 +1,5 @@
 import { auth } from "@/auth";
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { prisma } from "@/lib/db";
 
@@ -61,4 +61,15 @@ export async function optionalAuth(): Promise<{
   const anonId = anonCookie || crypto.randomUUID();
 
   return { userId: `anon_${anonId}`, authenticated: false, anonId };
+}
+
+export async function authenticateApiKey(
+  request: NextRequest
+): Promise<{ userId: string } | null> {
+  const authHeader = request.headers.get("authorization");
+  if (!authHeader?.startsWith("Bearer ")) return null;
+  const apiKey = authHeader.slice(7);
+  if (!apiKey) return null;
+  const user = await prisma.user.findUnique({ where: { apiKey } });
+  return user ? { userId: user.id } : null;
 }
