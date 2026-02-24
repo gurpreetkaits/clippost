@@ -7,6 +7,8 @@ import { transcribeFullAudio } from "@/lib/whisper";
 import { splitLongSegments } from "@/lib/whisper";
 import { findBestSegment, filterCaptionsForRange } from "@/lib/ai";
 import { NextResponse } from "next/server";
+import { prisma } from "@/lib/db";
+import { checkUsageLimit } from "@/lib/usage";
 
 function sseEvent(data: Record<string, unknown>): string {
   return `data: ${JSON.stringify(data)}\n\n`;
@@ -36,6 +38,14 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Purpose is required" }, { status: 400 });
   }
 
+  const usageCheck = await checkUsageLimit(userId, "CLIP_CREATED");
+  if (!usageCheck.allowed) {
+    return NextResponse.json(
+      { error: `Clip limit reached (${usageCheck.used}/${usageCheck.limit} this month). Upgrade to Pro for unlimited clips.` },
+      { status: 403 }
+    );
+  }
+
   const encoder = new TextEncoder();
   const stream = new ReadableStream({
     async start(controller) {
@@ -55,6 +65,20 @@ export async function POST(request: NextRequest) {
         const metadata = await downloadVideo(userId, url);
         const videoPath = getVideoPath(userId, metadata.filename);
         progress("downloading", "Video downloaded", 20);
+
+        // Upsert video record
+        const video = await prisma.video.upsert({
+          where: { userId_youtubeId: { userId, youtubeId: metadata.id } },
+          update: { title: metadata.title, filename: metadata.filename },
+          create: {
+            userId,
+            youtubeId: metadata.id,
+            title: metadata.title,
+            duration: metadata.duration,
+            filename: metadata.filename,
+            sourceUrl: url,
+          },
+        });
 
         // Step 2: Extract full audio
         progress("extracting_audio", "Extracting audio track...", 22);
@@ -106,6 +130,28 @@ export async function POST(request: NextRequest) {
         }
         progress("generating_clip", "Clip generated", 95);
 
+        // Track clip in DB
+        await prisma.clip.create({
+          data: {
+            userId,
+            videoId: video.id,
+            filename: clipFilename,
+            startTime: bestSegment.start,
+            endTime: bestSegment.end,
+            duration: bestSegment.end - bestSegment.start,
+            hasCaptions: generateCaptions,
+            method: "AUTO_TRIM",
+          },
+        });
+
+        await prisma.usageRecord.create({
+          data: {
+            userId,
+            action: "CLIP_CREATED",
+            metadata: { filename: clipFilename, method: "AUTO_TRIM" },
+          },
+        });
+
         // Step 6: Done
         send({
           type: "done",
@@ -115,6 +161,9 @@ export async function POST(request: NextRequest) {
           end: bestSegment.end,
           title: metadata.title,
           segmentReason: bestSegment.reason,
+          videoFilename: metadata.filename,
+          duration: metadata.duration,
+          segments,
         });
       } catch (err) {
         send({

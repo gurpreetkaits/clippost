@@ -11,8 +11,8 @@ export async function GET() {
   if (authResult instanceof NextResponse) return authResult;
   const { userId } = authResult;
 
-  const accounts = getAllAccounts(userId);
-  const defaultAccountId = getDefaultAccountId(userId);
+  const accounts = await getAllAccounts(userId);
+  const defaultAccountId = await getDefaultAccountId(userId);
 
   // Mask tokens in response
   const masked = accounts.map(({ accessToken, ...rest }) => ({
@@ -34,6 +34,6 @@ export async function DELETE(request: NextRequest) {
     return NextResponse.json({ error: "Missing account id" }, { status: 400 });
   }
 
-  removeAccount(userId, id);
+  await removeAccount(userId, id);
   return NextResponse.json({ success: true });
 }

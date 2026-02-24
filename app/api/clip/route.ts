@@ -1,8 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClipWithCaptions, CaptionSegment } from "@/lib/ffmpeg";
+import { createClipWithCaptions, CaptionSegment, CaptionStyle } from "@/lib/ffmpeg";
 import { getVideoPath } from "@/lib/youtube";
 import { requireAuth } from "@/lib/auth";
 import { splitLongSegments } from "@/lib/whisper";
+import { prisma } from "@/lib/db";
+import { checkUsageLimit } from "@/lib/usage";
 
 export async function POST(request: NextRequest) {
   const authResult = await requireAuth();
@@ -10,16 +12,26 @@ export async function POST(request: NextRequest) {
   const { userId } = authResult;
 
   try {
+    const usageCheck = await checkUsageLimit(userId, "CLIP_CREATED");
+    if (!usageCheck.allowed) {
+      return NextResponse.json(
+        { error: `Clip limit reached (${usageCheck.used}/${usageCheck.limit} this month). Upgrade to Pro for unlimited clips.` },
+        { status: 403 }
+      );
+    }
+
     const {
       filename,
       start,
       end,
       captions,
+      style,
     }: {
       filename: string;
       start: number;
       end: number;
       captions: CaptionSegment[];
+      style?: CaptionStyle;
     } = await request.json();
 
     if (!filename || start === undefined || end === undefined) {
@@ -43,8 +55,37 @@ export async function POST(request: NextRequest) {
       videoPath,
       start,
       end,
-      shortCaptions
+      shortCaptions,
+      style
     );
+
+    // Find the video record if it exists
+    const youtubeId = filename.replace(/\.mp4$/, "");
+    const video = await prisma.video.findFirst({
+      where: { userId, youtubeId },
+    });
+
+    await prisma.clip.create({
+      data: {
+        userId,
+        videoId: video?.id,
+        filename: clipFilename,
+        startTime: start,
+        endTime: end,
+        duration: end - start,
+        hasCaptions: shortCaptions.length > 0,
+        captionStyle: style ? JSON.parse(JSON.stringify(style)) : undefined,
+        method: "MANUAL",
+      },
+    });
+
+    await prisma.usageRecord.create({
+      data: {
+        userId,
+        action: "CLIP_CREATED",
+        metadata: { filename: clipFilename, method: "MANUAL" },
+      },
+    });
 
     return NextResponse.json({ clipFilename });
   } catch (error) {

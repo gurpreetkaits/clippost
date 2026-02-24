@@ -7,6 +7,8 @@ import {
 import { getAccountById, refreshTokenIfNeeded } from "@/lib/accounts";
 import { getVideoPath } from "@/lib/youtube";
 import { requireAuth } from "@/lib/auth";
+import { prisma } from "@/lib/db";
+import { checkUsageLimit } from "@/lib/usage";
 import fs from "fs";
 import path from "path";
 import axios from "axios";
@@ -34,6 +36,14 @@ export async function POST(request: NextRequest) {
   const { userId } = authResult;
 
   try {
+    const usageCheck = await checkUsageLimit(userId, "PUBLISH");
+    if (!usageCheck.allowed) {
+      return NextResponse.json(
+        { error: `Publish limit reached (${usageCheck.used}/${usageCheck.limit} this month). Upgrade to Pro for unlimited publishing.` },
+        { status: 403 }
+      );
+    }
+
     const { clipFilename, caption, accountId } = await request.json();
 
     if (!clipFilename) {
@@ -50,7 +60,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const account = getAccountById(userId, accountId);
+    const account = await getAccountById(userId, accountId);
     if (!account) {
       return NextResponse.json(
         { error: "Account not found" },
@@ -86,6 +96,26 @@ export async function POST(request: NextRequest) {
 
     // Step 4: Publish
     const mediaId = await publishReel(credentials, containerId);
+
+    // Track publish in DB
+    const clip = await prisma.clip.findFirst({
+      where: { userId, filename: clipFilename },
+      orderBy: { createdAt: "desc" },
+    });
+    if (clip) {
+      await prisma.clip.update({
+        where: { id: clip.id },
+        data: { publishedAt: new Date(), instagramMediaId: mediaId },
+      });
+    }
+
+    await prisma.usageRecord.create({
+      data: {
+        userId,
+        action: "PUBLISH",
+        metadata: { clipFilename, mediaId, accountId },
+      },
+    });
 
     return NextResponse.json({
       success: true,

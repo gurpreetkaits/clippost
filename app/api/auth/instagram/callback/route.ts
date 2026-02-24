@@ -109,7 +109,7 @@ export async function GET(request: NextRequest) {
 
       const igData = igResponse.data;
 
-      upsertAccount(userId, {
+      await upsertAccount(userId, {
         id: igData.id,
         username: igData.username || "",
         name: igData.name || igData.username || "",

@@ -1,6 +1,11 @@
 "use client";
 
-import { CaptionSegment } from "@/lib/ffmpeg";
+interface CaptionSegment {
+  start: number;
+  end: number;
+  text: string;
+  words?: { word: string; start: number; end: number }[];
+}
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";

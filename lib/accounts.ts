@@ -1,8 +1,5 @@
-import fs from "fs";
-import path from "path";
 import axios from "axios";
-
-const DATA_DIR = path.join(process.cwd(), "data");
+import { prisma } from "@/lib/db";
 
 export interface InstagramAccount {
   id: string;
@@ -15,92 +12,113 @@ export interface InstagramAccount {
   connectedAt: string;
 }
 
-export interface AccountsStore {
-  accounts: InstagramAccount[];
-  defaultAccountId: string | null;
+export async function getAllAccounts(userId: string): Promise<InstagramAccount[]> {
+  const accounts = await prisma.instagramAccount.findMany({
+    where: { userId },
+    orderBy: { connectedAt: "desc" },
+  });
+  return accounts.map(dbToAccount);
 }
 
-function getUserFile(userId: string): string {
-  // Sanitize userId to prevent path traversal
-  const safeId = userId.replace(/[^a-zA-Z0-9_-]/g, "_");
-  const userDir = path.join(DATA_DIR, "users", safeId);
-  if (!fs.existsSync(userDir)) {
-    fs.mkdirSync(userDir, { recursive: true });
-  }
-  return path.join(userDir, "accounts.json");
-}
-
-function readStore(userId: string): AccountsStore {
-  const file = getUserFile(userId);
-  if (!fs.existsSync(file)) {
-    return { accounts: [], defaultAccountId: null };
-  }
-  const raw = fs.readFileSync(file, "utf-8");
-  return JSON.parse(raw);
-}
-
-function writeStore(userId: string, store: AccountsStore) {
-  const file = getUserFile(userId);
-  fs.writeFileSync(file, JSON.stringify(store, null, 2));
-}
-
-export function getAllAccounts(userId: string): InstagramAccount[] {
-  return readStore(userId).accounts;
-}
-
-export function getAccountById(
+export async function getAccountById(
   userId: string,
   id: string
-): InstagramAccount | undefined {
-  const store = readStore(userId);
-  return store.accounts.find((a) => a.id === id);
+): Promise<InstagramAccount | undefined> {
+  const account = await prisma.instagramAccount.findFirst({
+    where: { userId, id },
+  });
+  return account ? dbToAccount(account) : undefined;
 }
 
-export function getDefaultAccount(
+export async function getDefaultAccount(
   userId: string
-): InstagramAccount | undefined {
-  const store = readStore(userId);
-  if (store.defaultAccountId) {
-    return store.accounts.find((a) => a.id === store.defaultAccountId);
+): Promise<InstagramAccount | undefined> {
+  let account = await prisma.instagramAccount.findFirst({
+    where: { userId, isDefault: true },
+  });
+  if (!account) {
+    account = await prisma.instagramAccount.findFirst({
+      where: { userId },
+      orderBy: { connectedAt: "asc" },
+    });
   }
-  return store.accounts[0];
+  return account ? dbToAccount(account) : undefined;
 }
 
-export function upsertAccount(userId: string, account: InstagramAccount) {
-  const store = readStore(userId);
-  const idx = store.accounts.findIndex((a) => a.id === account.id);
-  if (idx >= 0) {
-    store.accounts[idx] = account;
-  } else {
-    store.accounts.push(account);
-  }
-  if (!store.defaultAccountId && store.accounts.length === 1) {
-    store.defaultAccountId = account.id;
-  }
-  writeStore(userId, store);
+export async function upsertAccount(userId: string, account: InstagramAccount) {
+  const count = await prisma.instagramAccount.count({ where: { userId } });
+  const isFirst = count === 0;
+
+  await prisma.instagramAccount.upsert({
+    where: { id: account.id },
+    update: {
+      username: account.username,
+      name: account.name,
+      profilePictureUrl: account.profilePictureUrl,
+      accessToken: account.accessToken,
+      tokenExpiresAt: new Date(account.tokenExpiresAt),
+      facebookPageId: account.facebookPageId,
+    },
+    create: {
+      id: account.id,
+      userId,
+      username: account.username,
+      name: account.name,
+      profilePictureUrl: account.profilePictureUrl,
+      accessToken: account.accessToken,
+      tokenExpiresAt: new Date(account.tokenExpiresAt),
+      facebookPageId: account.facebookPageId,
+      isDefault: isFirst,
+      connectedAt: new Date(account.connectedAt),
+    },
+  });
 }
 
-export function removeAccount(userId: string, id: string) {
-  const store = readStore(userId);
-  store.accounts = store.accounts.filter((a) => a.id !== id);
-  if (store.defaultAccountId === id) {
-    store.defaultAccountId = store.accounts[0]?.id ?? null;
+export async function removeAccount(userId: string, id: string) {
+  const account = await prisma.instagramAccount.findFirst({
+    where: { userId, id },
+  });
+  if (!account) return;
+
+  await prisma.instagramAccount.delete({ where: { id } });
+
+  if (account.isDefault) {
+    const next = await prisma.instagramAccount.findFirst({
+      where: { userId },
+      orderBy: { connectedAt: "asc" },
+    });
+    if (next) {
+      await prisma.instagramAccount.update({
+        where: { id: next.id },
+        data: { isDefault: true },
+      });
+    }
   }
-  writeStore(userId, store);
 }
 
-export function setDefaultAccount(userId: string, id: string) {
-  const store = readStore(userId);
-  const exists = store.accounts.some((a) => a.id === id);
-  if (!exists) {
+export async function setDefaultAccount(userId: string, id: string) {
+  const account = await prisma.instagramAccount.findFirst({
+    where: { userId, id },
+  });
+  if (!account) {
     throw new Error(`Account ${id} not found`);
   }
-  store.defaultAccountId = id;
-  writeStore(userId, store);
+
+  await prisma.$transaction([
+    prisma.instagramAccount.updateMany({
+      where: { userId, isDefault: true },
+      data: { isDefault: false },
+    }),
+    prisma.instagramAccount.update({
+      where: { id },
+      data: { isDefault: true },
+    }),
+  ]);
 }
 
-export function getDefaultAccountId(userId: string): string | null {
-  return readStore(userId).defaultAccountId;
+export async function getDefaultAccountId(userId: string): Promise<string | null> {
+  const account = await getDefaultAccount(userId);
+  return account?.id ?? null;
 }
 
 export async function refreshTokenIfNeeded(
@@ -131,10 +149,32 @@ export async function refreshTokenIfNeeded(
     const { access_token, expires_in } = response.data;
     account.accessToken = access_token;
     account.tokenExpiresAt = Date.now() + expires_in * 1000;
-    upsertAccount(userId, account);
+    await upsertAccount(userId, account);
     return account;
   } catch (error) {
     console.error("Failed to refresh token for account", account.id, error);
     return account;
   }
+}
+
+function dbToAccount(db: {
+  id: string;
+  username: string;
+  name: string;
+  profilePictureUrl: string;
+  accessToken: string;
+  tokenExpiresAt: Date;
+  facebookPageId: string;
+  connectedAt: Date;
+}): InstagramAccount {
+  return {
+    id: db.id,
+    username: db.username,
+    name: db.name,
+    profilePictureUrl: db.profilePictureUrl,
+    accessToken: db.accessToken,
+    tokenExpiresAt: db.tokenExpiresAt.getTime(),
+    facebookPageId: db.facebookPageId,
+    connectedAt: db.connectedAt.toISOString(),
+  };
 }

@@ -14,7 +14,7 @@ export async function PUT(request: NextRequest) {
   }
 
   try {
-    setDefaultAccount(userId, id);
+    await setDefaultAccount(userId, id);
     return NextResponse.json({ success: true });
   } catch (error) {
     return NextResponse.json(

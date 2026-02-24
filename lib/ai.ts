@@ -117,6 +117,29 @@ export function filterCaptionsForRange(
   return filtered;
 }
 
+export async function generateCaption(
+  videoTitle: string,
+  clipDuration: number,
+  platform: "instagram" | "youtube"
+): Promise<string> {
+  const response = await openai.chat.completions.create({
+    model: "gpt-4o-mini",
+    temperature: 0.7,
+    messages: [
+      {
+        role: "system",
+        content: `You are a social media content creator. Generate a short, engaging ${platform === "instagram" ? "Instagram Reel" : "YouTube Shorts"} caption/description for a video clip. Include 3-5 relevant hashtags at the end. Keep it under 150 characters (excluding hashtags). Be catchy and use the video title as context. Do not use emojis excessively.`,
+      },
+      {
+        role: "user",
+        content: `Video: "${videoTitle}" (${Math.round(clipDuration)}s clip)`,
+      },
+    ],
+  });
+
+  return response.choices[0]?.message?.content || videoTitle;
+}
+
 function formatTime(seconds: number): string {
   const m = Math.floor(seconds / 60);
   const s = Math.floor(seconds % 60);

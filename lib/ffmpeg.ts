@@ -2,6 +2,10 @@ import { execFile } from "child_process";
 import { promisify } from "util";
 import path from "path";
 import fs from "fs";
+import { CaptionStyle, DEFAULT_CAPTION_STYLE } from "./caption-style";
+
+export type { CaptionStyle };
+export { DEFAULT_CAPTION_STYLE };
 
 const execFileAsync = promisify(execFile);
 
@@ -27,6 +31,18 @@ export interface CaptionSegment {
   end: number;
   text: string;
   words?: CaptionWord[];
+}
+
+// Convert hex color (#RRGGBB) to ASS color format (&HAABBGGRR)
+function hexToAss(hex: string, alpha: number = 0): string {
+  const r = hex.slice(1, 3);
+  const g = hex.slice(3, 5);
+  const b = hex.slice(5, 7);
+  const a = Math.round((1 - alpha / 100) * 255)
+    .toString(16)
+    .padStart(2, "0")
+    .toUpperCase();
+  return `&H${a}${b}${g}${r}`.toUpperCase();
 }
 
 // ASS time format: H:MM:SS.CC (centiseconds)
@@ -72,16 +88,24 @@ function generateAssContent(
   captions: CaptionSegment[],
   clipStart: number,
   width: number,
-  height: number
+  height: number,
+  style?: CaptionStyle
 ): string {
-  const fontSize = Math.round(height * 0.033);
+  const s = style || DEFAULT_CAPTION_STYLE;
+
+  const fontSize = Math.round(s.fontSize * (height / 1080));
   const boxPad = Math.round(fontSize * 0.5);
   const marginV = Math.round(height * 0.06);
   const marginLR = Math.round(width * 0.05);
 
-  // PrimaryColour = black (spoken), SecondaryColour = gray (unspoken)
-  // BorderStyle=3 = opaque box, OutlineColour = white box background
-  // Alignment=2 = bottom center
+  const primaryColour = hexToAss(s.textColor, 100);
+  const secondaryColour = "&H00AAAAAA";
+  const outlineColour = hexToAss(s.bgColor, s.bgOpacity);
+  const boldVal = s.bold ? 1 : 0;
+  const italicVal = s.italic ? 1 : 0;
+  const alignmentMap = { top: 8, center: 5, bottom: 2 };
+  const alignment = alignmentMap[s.position];
+
   const lines: string[] = [
     "[Script Info]",
     "ScriptType: v4.00+",
@@ -91,7 +115,7 @@ function generateAssContent(
     "",
     "[V4+ Styles]",
     "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
-    `Style: Default,Helvetica Neue,${fontSize},&H00000000,&H00AAAAAA,&H00FFFFFF,&H00000000,1,0,0,0,100,100,0,0,3,${boxPad},0,2,${marginLR},${marginLR},${marginV},1`,
+    `Style: Default,${s.fontFamily},${fontSize},${primaryColour},${secondaryColour},${outlineColour},&H00000000,${boldVal},${italicVal},0,0,100,100,0,0,3,${boxPad},0,${alignment},${marginLR},${marginLR},${marginV},1`,
     "",
     "[Events]",
     "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
@@ -207,7 +231,8 @@ export async function createClipWithCaptions(
   videoPath: string,
   start: number,
   end: number,
-  captions: CaptionSegment[]
+  captions: CaptionSegment[],
+  style?: CaptionStyle
 ): Promise<string> {
   const userDir = getUserTmpDir(userId);
   const outputFilename = `clip_${Date.now()}_${Math.random().toString(36).slice(2)}.mp4`;
@@ -218,7 +243,7 @@ export async function createClipWithCaptions(
   const { width, height } = await getVideoDimensions(videoPath);
 
   // Generate ASS subtitle file
-  const assContent = generateAssContent(captions, start, width, height);
+  const assContent = generateAssContent(captions, start, width, height, style);
   const assPath = path.join(
     userDir,
     `subs_${Date.now()}_${Math.random().toString(36).slice(2)}.ass`

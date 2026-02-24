@@ -7,9 +7,25 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
     signIn: "/login",
   },
   callbacks: {
-    jwt({ token, account }) {
+    async jwt({ token, account, profile }) {
       if (account) {
-        token.id = account.providerAccountId;
+        // Dynamically import prisma to avoid Edge Runtime issues in middleware
+        const { prisma } = await import("@/lib/db");
+        const user = await prisma.user.upsert({
+          where: { googleId: account.providerAccountId },
+          update: {
+            email: profile?.email,
+            name: profile?.name,
+            image: profile?.picture as string | undefined,
+          },
+          create: {
+            googleId: account.providerAccountId,
+            email: profile?.email,
+            name: profile?.name,
+            image: profile?.picture as string | undefined,
+          },
+        });
+        token.id = user.id;
       }
       return token;
     },

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import path from "path";
 import fs from "fs";
-import { requireAuth } from "@/lib/auth";
+import { optionalAuth } from "@/lib/auth";
 
 const TMP_DIR = path.join(process.cwd(), "tmp");
 
@@ -33,9 +33,7 @@ function nodeStreamToWeb(stream: fs.ReadStream): ReadableStream {
 }
 
 export async function GET(request: NextRequest) {
-  const authResult = await requireAuth();
-  if (authResult instanceof NextResponse) return authResult;
-  const { userId } = authResult;
+  const { userId } = await optionalAuth();
 
   const filename = request.nextUrl.searchParams.get("file");
 

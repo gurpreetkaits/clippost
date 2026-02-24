@@ -1,0 +1,138 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../lib/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id              String   @id @default(cuid())
+  googleId        String   @unique
+  email           String?
+  name            String?
+  image           String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  // Billing
+  polarCustomerId String?  @unique
+  subscriptionId  String?  @unique
+  plan            Plan     @default(FREE)
+  planExpiresAt   DateTime?
+
+  // Preferences
+  autoPostInstagram Boolean @default(false)
+  autoPostYoutube   Boolean @default(false)
+  useAiCaptions     Boolean @default(true)
+
+  instagramAccounts InstagramAccount[]
+  youtubeChannels   YouTubeChannel[]
+  videos            Video[]
+  clips             Clip[]
+  usageRecords      UsageRecord[]
+
+  @@map("users")
+}
+
+enum Plan {
+  FREE
+  PRO
+}
+
+model InstagramAccount {
+  id                String   @id
+  userId            String
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  username          String
+  name              String
+  profilePictureUrl String   @default("")
+  accessToken       String
+  tokenExpiresAt    DateTime
+  facebookPageId    String
+  isDefault         Boolean  @default(false)
+  connectedAt       DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@unique([userId, id])
+  @@map("instagram_accounts")
+}
+
+model YouTubeChannel {
+  id            String   @id @default(cuid())
+  userId        String
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  channelId     String
+  channelTitle  String
+  thumbnailUrl  String   @default("")
+  accessToken   String
+  refreshToken  String
+  tokenExpiresAt DateTime
+  isDefault     Boolean  @default(false)
+  connectedAt   DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@unique([userId, channelId])
+  @@map("youtube_channels")
+}
+
+model Video {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  youtubeId String
+  title     String
+  duration  Float
+  filename  String
+  sourceUrl String
+  createdAt DateTime @default(now())
+  clips     Clip[]
+
+  @@unique([userId, youtubeId])
+  @@map("videos")
+}
+
+model Clip {
+  id               String     @id @default(cuid())
+  userId           String
+  user             User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  videoId          String?
+  video            Video?     @relation(fields: [videoId], references: [id], onDelete: SetNull)
+  filename         String
+  startTime        Float
+  endTime          Float
+  duration         Float
+  hasCaptions      Boolean    @default(false)
+  captionStyle     Json?
+  method           ClipMethod @default(MANUAL)
+  publishedAt      DateTime?
+  instagramMediaId String?
+  youtubeVideoId   String?
+  createdAt        DateTime   @default(now())
+
+  @@map("clips")
+}
+
+enum ClipMethod {
+  MANUAL
+  AUTO_TRIM
+}
+
+model UsageRecord {
+  id        String      @id @default(cuid())
+  userId    String
+  user      User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  action    UsageAction
+  metadata  Json?
+  createdAt DateTime    @default(now())
+
+  @@index([userId, action, createdAt])
+  @@map("usage_records")
+}
+
+enum UsageAction {
+  CLIP_CREATED
+  VIDEO_DOWNLOADED
+  PUBLISH
+}

@@ -1,17 +1,19 @@
 "use client";
 
-import { useState, useCallback, Suspense } from "react";
+import { useState, useCallback, useEffect, Suspense } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import dynamic from "next/dynamic";
 import ClipSelector from "@/components/ClipSelector";
 import CaptionEditor from "@/components/CaptionEditor";
 import CaptionPreview from "@/components/CaptionPreview";
+import CaptionStyleEditor from "@/components/CaptionStyleEditor";
 import PublishButton from "@/components/PublishButton";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Loader2, ArrowLeft, Play, Pause, AlertCircle, Settings } from "lucide-react";
 import Link from "next/link";
+import { CaptionStyle, DEFAULT_CAPTION_STYLE } from "@/lib/caption-style";
 
 const VideoPlayer = dynamic(() => import("@/components/VideoPlayer"), {
   ssr: false,
@@ -27,10 +29,36 @@ function EditorContent() {
   const searchParams = useSearchParams();
   const router = useRouter();
 
-  const filename = searchParams.get("filename") || "";
-  const title = searchParams.get("title") || "";
-  const totalDuration = parseFloat(searchParams.get("duration") || "0");
-  const startTime = parseFloat(searchParams.get("startTime") || "0");
+  // Check for auto-trim data in sessionStorage
+  const [autoTrimLoaded, setAutoTrimLoaded] = useState(false);
+  const [atFilename, setAtFilename] = useState("");
+  const [atTitle, setAtTitle] = useState("");
+  const [atDuration, setAtDuration] = useState(0);
+  const [atStart, setAtStart] = useState(0);
+  const [atEnd, setAtEnd] = useState(0);
+  const [atCaptions, setAtCaptions] = useState<CaptionSegment[]>([]);
+
+  useEffect(() => {
+    const raw = sessionStorage.getItem("autoTrimData");
+    if (raw) {
+      try {
+        const data = JSON.parse(raw);
+        setAtFilename(data.filename || "");
+        setAtTitle(data.title || "");
+        setAtDuration(data.duration || 0);
+        setAtStart(data.start || 0);
+        setAtEnd(data.end || 0);
+        setAtCaptions(data.captions || []);
+        setAutoTrimLoaded(true);
+      } catch {}
+      sessionStorage.removeItem("autoTrimData");
+    }
+  }, []);
+
+  const filename = autoTrimLoaded ? atFilename : (searchParams.get("filename") || "");
+  const title = autoTrimLoaded ? atTitle : (searchParams.get("title") || "");
+  const totalDuration = autoTrimLoaded ? atDuration : parseFloat(searchParams.get("duration") || "0");
+  const startTime = autoTrimLoaded ? atStart : parseFloat(searchParams.get("startTime") || "0");
 
   const [start, setStart] = useState(Math.min(startTime, totalDuration));
   const [end, setEnd] = useState(Math.min(startTime + 30, totalDuration));
@@ -38,10 +66,22 @@ function EditorContent() {
   const [currentTime, setCurrentTime] = useState(0);
   const [captions, setCaptions] = useState<CaptionSegment[]>([]);
   const [clipFilename, setClipFilename] = useState<string | null>(null);
+  const [captionStyle, setCaptionStyle] = useState<CaptionStyle>(DEFAULT_CAPTION_STYLE);
 
   const [transcribing, setTranscribing] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState("");
+
+  // Apply auto-trim data once loaded
+  useEffect(() => {
+    if (autoTrimLoaded) {
+      setStart(atStart);
+      setEnd(atEnd);
+      if (atCaptions.length > 0) {
+        setCaptions(atCaptions);
+      }
+    }
+  }, [autoTrimLoaded, atStart, atEnd, atCaptions]);
 
   const videoUrl = `/api/video?file=${filename}`;
   const clipUrl = clipFilename
@@ -100,7 +140,7 @@ function EditorContent() {
       const response = await fetch("/api/clip", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ filename, start, end, captions: finalCaptions }),
+        body: JSON.stringify({ filename, start, end, captions: finalCaptions, style: captionStyle }),
       });
 
       const data = await response.json();
@@ -115,7 +155,7 @@ function EditorContent() {
     } finally {
       setGenerating(false);
     }
-  }, [filename, start, end, captions]);
+  }, [filename, start, end, captions, captionStyle]);
 
   if (!filename) {
     return (
@@ -168,7 +208,7 @@ function EditorContent() {
                 playing={playing}
                 onProgress={setCurrentTime}
               />
-              <CaptionPreview captions={captions} currentTime={currentTime} />
+              <CaptionPreview captions={captions} currentTime={currentTime} style={captionStyle} />
             </div>
 
             <ClipSelector
@@ -206,7 +246,7 @@ function EditorContent() {
             </div>
           </div>
 
-          {/* Right column: Captions + Generate + Publish */}
+          {/* Right column: Captions + Style + Generate + Publish */}
           <div className="space-y-4">
             <Card>
               <CardHeader>
@@ -216,6 +256,8 @@ function EditorContent() {
                 <CaptionEditor captions={captions} onUpdate={setCaptions} />
               </CardContent>
             </Card>
+
+            <CaptionStyleEditor style={captionStyle} onChange={setCaptionStyle} />
 
             <Button
               onClick={handleGenerateClip}
