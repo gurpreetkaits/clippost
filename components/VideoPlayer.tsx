@@ -9,6 +9,7 @@ interface VideoPlayerProps {
   playing?: boolean;
   onProgress?: (seconds: number) => void;
   onDuration?: (duration: number) => void;
+  style?: React.CSSProperties;
 }
 
 export default function VideoPlayer({
@@ -18,6 +19,7 @@ export default function VideoPlayer({
   playing = false,
   onProgress,
   onDuration,
+  style,
 }: VideoPlayerProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
 
@@ -67,12 +69,16 @@ export default function VideoPlayer({
   }, [handleSeekToStart]);
 
   return (
-    <div className="relative w-full aspect-video bg-black rounded-lg overflow-hidden">
+    <div
+      className="relative w-full bg-black rounded-lg overflow-hidden"
+      style={style ? { width: "100%", height: "100%" } : { aspectRatio: "16/9" }}
+    >
       <video
         ref={videoRef}
         src={url}
         controls
-        className="w-full h-full object-contain"
+        className="w-full h-full"
+        style={style ?? { objectFit: "contain" }}
         preload="auto"
       />
     </div>

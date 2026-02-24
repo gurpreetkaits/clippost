@@ -1,10 +1,8 @@
 "use client";
 
-import { useState, useCallback, useEffect, useRef, useMemo } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import { useRouter, useParams } from "next/navigation";
 import dynamic from "next/dynamic";
-import CaptionEditor from "@/components/CaptionEditor";
-import CaptionTimeline from "@/components/CaptionTimeline";
 import CaptionStyleEditor from "@/components/CaptionStyleEditor";
 import PublishButton from "@/components/PublishButton";
 import { Button } from "@/components/ui/button";
@@ -23,17 +21,18 @@ import {
   CheckCircle2,
 } from "lucide-react";
 import { CaptionStyle, DEFAULT_CAPTION_STYLE } from "@/lib/caption-style";
+import {
+  VideoLayout,
+  DEFAULT_LAYOUT,
+  ASPECT_RATIOS,
+  MASKS,
+  getMaskCSS,
+  getAspectCSS,
+} from "@/lib/video-layout";
 
 const VideoPlayer = dynamic(() => import("@/components/VideoPlayer"), {
   ssr: false,
 });
-
-interface CaptionSegment {
-  start: number;
-  end: number;
-  text: string;
-  words?: { word: string; start: number; end: number }[];
-}
 
 interface ClipData {
   id: string;
@@ -69,15 +68,13 @@ export default function ClipEditorPage() {
   const [clipFilename, setClipFilename] = useState("");
 
   // Editor state
-  const [segments, setSegments] = useState<CaptionSegment[]>([]);
   const [captionStyle, setCaptionStyle] = useState<CaptionStyle>(DEFAULT_CAPTION_STYLE);
+  const [layout, setLayout] = useState<VideoLayout>(DEFAULT_LAYOUT);
   const [playing, setPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
-  const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
-  const [transcribing, setTranscribing] = useState(false);
   const [generating, setGenerating] = useState(false);
 
-  // Fetch clip on mount, then auto-transcribe so captions are immediately editable
+  // Fetch clip on mount
   useEffect(() => {
     let cancelled = false;
 
@@ -94,30 +91,6 @@ export default function ClipEditorPage() {
           setCaptionStyle(data.captionStyle as CaptionStyle);
         }
         setLoading(false);
-
-        // Auto-transcribe if source video exists
-        if (data.video?.fileExists && data.video?.filename) {
-          setTranscribing(true);
-          try {
-            const tr = await fetch("/api/transcribe", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                filename: data.video.filename,
-                start: data.startTime,
-                end: data.endTime,
-              }),
-            });
-            const trData = await tr.json();
-            if (!cancelled && tr.ok) {
-              setSegments(trData.segments);
-            }
-          } catch {
-            // Non-fatal: user can still manually transcribe
-          } finally {
-            if (!cancelled) setTranscribing(false);
-          }
-        }
       } catch (err) {
         if (!cancelled) {
           setError(err instanceof Error ? err.message : "Failed to load clip");
@@ -130,57 +103,8 @@ export default function ClipEditorPage() {
   }, [clipId]);
 
   const clipDuration = clip ? clip.endTime - clip.startTime : 0;
-  const originalTime = clip ? clip.startTime + currentTime : currentTime;
 
-  // Find the active caption segment for the current playback time
-  const activeSegment = useMemo(() => {
-    if (segments.length === 0) return null;
-    return segments.find((s) => originalTime >= s.start && originalTime <= s.end) ?? null;
-  }, [segments, originalTime]);
-
-  // Ref for the video container to compute scale ratio
   const videoContainerRef = useRef<HTMLDivElement>(null);
-  const [containerWidth, setContainerWidth] = useState(0);
-
-  useEffect(() => {
-    const el = videoContainerRef.current;
-    if (!el) return;
-    const obs = new ResizeObserver((entries) => {
-      for (const entry of entries) {
-        setContainerWidth(entry.contentRect.width);
-      }
-    });
-    obs.observe(el);
-    return () => obs.disconnect();
-  }, [clip]);
-
-  const handleTranscribe = useCallback(async () => {
-    if (!clip?.video) return;
-    setTranscribing(true);
-    setError("");
-
-    try {
-      const response = await fetch("/api/transcribe", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          filename: clip.video.filename,
-          start: clip.startTime,
-          end: clip.endTime,
-        }),
-      });
-
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data.error || "Transcription failed");
-      }
-      setSegments(data.segments);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Transcription failed");
-    } finally {
-      setTranscribing(false);
-    }
-  }, [clip]);
 
   const handleRegenerateClip = useCallback(async () => {
     if (!clip?.video) return;
@@ -188,26 +112,6 @@ export default function ClipEditorPage() {
     setError("");
 
     try {
-      // Auto-transcribe if no segments yet
-      let finalSegments = segments;
-      if (finalSegments.length === 0) {
-        const transcribeRes = await fetch("/api/transcribe", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            filename: clip.video.filename,
-            start: clip.startTime,
-            end: clip.endTime,
-          }),
-        });
-        const transcribeData = await transcribeRes.json();
-        if (!transcribeRes.ok) {
-          throw new Error(transcribeData.error || "Transcription failed");
-        }
-        finalSegments = transcribeData.segments;
-        setSegments(finalSegments);
-      }
-
       const response = await fetch("/api/clip", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -215,8 +119,9 @@ export default function ClipEditorPage() {
           filename: clip.video.filename,
           start: clip.startTime,
           end: clip.endTime,
-          captions: finalSegments,
+          captions: [],
           style: captionStyle,
+          layout,
         }),
       });
 
@@ -230,22 +135,7 @@ export default function ClipEditorPage() {
     } finally {
       setGenerating(false);
     }
-  }, [clip, segments, captionStyle]);
-
-  const handleSegmentTimingChange = useCallback(
-    (index: number, edge: "start" | "end", newTime: number) => {
-      setSegments((prev) => {
-        const updated = [...prev];
-        updated[index] = {
-          ...updated[index],
-          [edge]: newTime,
-          words: undefined,
-        };
-        return updated;
-      });
-    },
-    []
-  );
+  }, [clip, captionStyle, layout]);
 
   // Loading state
   if (loading) {
@@ -319,7 +209,17 @@ export default function ClipEditorPage() {
                   </p>
                   <CheckCircle2 className="h-3.5 w-3.5 text-green-500" />
                 </div>
-                <div ref={videoContainerRef} className="relative">
+                <div
+                  ref={videoContainerRef}
+                  className="relative mx-auto bg-black"
+                  style={{
+                    ...(getAspectCSS(layout.aspectRatio)
+                      ? { aspectRatio: getAspectCSS(layout.aspectRatio), maxHeight: "65vh" }
+                      : {}),
+                    overflow: "hidden",
+                    ...getMaskCSS(layout.mask),
+                  }}
+                >
                   <VideoPlayer
                     key={clipFilename}
                     url={clipUrl}
@@ -327,42 +227,12 @@ export default function ClipEditorPage() {
                     end={clipDuration}
                     playing={playing}
                     onProgress={setCurrentTime}
+                    style={
+                      getAspectCSS(layout.aspectRatio)
+                        ? { objectFit: "cover" as const, width: "100%", height: "100%" }
+                        : undefined
+                    }
                   />
-                  {/* Live caption overlay */}
-                  {activeSegment && (
-                    <div
-                      className="absolute inset-x-0 flex justify-center pointer-events-none"
-                      style={{
-                        ...(captionStyle.position === "top"
-                          ? { top: "8%" }
-                          : captionStyle.position === "center"
-                          ? { top: "50%", transform: "translateY(-50%)" }
-                          : { bottom: "8%" }),
-                      }}
-                    >
-                      <span
-                        className="rounded-md text-center leading-relaxed max-w-[90%]"
-                        style={{
-                          fontFamily: captionStyle.fontFamily,
-                          fontSize: `${Math.max(
-                            12,
-                            captionStyle.fontSize * (containerWidth / 1080)
-                          )}px`,
-                          color: captionStyle.textColor,
-                          backgroundColor: `${captionStyle.bgColor}${Math.round(
-                            (captionStyle.bgOpacity / 100) * 255
-                          )
-                            .toString(16)
-                            .padStart(2, "0")}`,
-                          fontWeight: captionStyle.bold ? "bold" : "normal",
-                          fontStyle: captionStyle.italic ? "italic" : "normal",
-                          padding: "4px 10px",
-                        }}
-                      >
-                        {activeSegment.text}
-                      </span>
-                    </div>
-                  )}
                 </div>
               </div>
 
@@ -379,20 +249,6 @@ export default function ClipEditorPage() {
                   )}
                   {playing ? "Pause" : "Play"}
                 </Button>
-                <Button
-                  size="sm"
-                  onClick={handleTranscribe}
-                  disabled={transcribing || !clip.video?.fileExists}
-                >
-                  {transcribing ? (
-                    <>
-                      <Loader2 className="animate-spin" />
-                      Transcribing...
-                    </>
-                  ) : (
-                    "Transcribe"
-                  )}
-                </Button>
                 <span className="flex items-center text-xs text-muted-foreground">
                   {formatTimestamp(clip.startTime)} &ndash;{" "}
                   {formatTimestamp(clip.endTime)} ({Math.round(clipDuration)}s)
@@ -402,6 +258,52 @@ export default function ClipEditorPage() {
 
             {/* RIGHT: Style + Actions */}
             <div className="space-y-5">
+              {/* Layout */}
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm">Layout</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div>
+                    <p className="text-xs text-muted-foreground mb-2">Aspect Ratio</p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {ASPECT_RATIOS.map((r) => (
+                        <button
+                          key={r.id}
+                          onClick={() => setLayout((l) => ({ ...l, aspectRatio: r.id }))}
+                          className={`px-2.5 py-1 text-xs rounded-md border transition-colors ${
+                            layout.aspectRatio === r.id
+                              ? "bg-primary text-primary-foreground border-primary"
+                              : "bg-muted/50 text-muted-foreground border-border hover:bg-muted"
+                          }`}
+                          title={r.desc}
+                        >
+                          {r.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <div>
+                    <p className="text-xs text-muted-foreground mb-2">Mask</p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {MASKS.map((m) => (
+                        <button
+                          key={m.id}
+                          onClick={() => setLayout((l) => ({ ...l, mask: m.id }))}
+                          className={`px-2.5 py-1 text-xs rounded-md border transition-colors ${
+                            layout.mask === m.id
+                              ? "bg-primary text-primary-foreground border-primary"
+                              : "bg-muted/50 text-muted-foreground border-border hover:bg-muted"
+                          }`}
+                        >
+                          {m.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+
               {/* Caption Style */}
               <CaptionStyleEditor style={captionStyle} onChange={setCaptionStyle} />
 
@@ -455,36 +357,6 @@ export default function ClipEditorPage() {
             </div>
           </div>
 
-          {/* Full-width: Caption Timeline */}
-          {segments.length > 0 && (
-            <div className="mt-2">
-              <CaptionTimeline
-                segments={segments}
-                clipStart={clip.startTime}
-                clipEnd={clip.endTime}
-                currentTime={originalTime}
-                selectedIndex={selectedIndex}
-                onSelectSegment={setSelectedIndex}
-                onSegmentTimingChange={handleSegmentTimingChange}
-              />
-            </div>
-          )}
-
-          {/* Full-width: Caption Editor */}
-          {segments.length > 0 && (
-            <Card>
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm">Captions</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <CaptionEditor
-                  captions={segments}
-                  onUpdate={setSegments}
-                  selectedIndex={selectedIndex}
-                />
-              </CardContent>
-            </Card>
-          )}
         </div>
       </div>
     </div>

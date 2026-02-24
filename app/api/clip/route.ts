@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClipWithCaptions, CaptionSegment, CaptionStyle } from "@/lib/ffmpeg";
+import { VideoLayout } from "@/lib/video-layout";
 import { getVideoPath } from "@/lib/youtube";
 import { requireAuth } from "@/lib/auth";
 import { splitLongSegments } from "@/lib/whisper";
@@ -26,12 +27,14 @@ export async function POST(request: NextRequest) {
       end,
       captions,
       style,
+      layout,
     }: {
       filename: string;
       start: number;
       end: number;
       captions: CaptionSegment[];
       style?: CaptionStyle;
+      layout?: VideoLayout;
     } = await request.json();
 
     if (!filename || start === undefined || end === undefined) {
@@ -56,7 +59,8 @@ export async function POST(request: NextRequest) {
       start,
       end,
       shortCaptions,
-      style
+      style,
+      layout
     );
 
     // Find the video record if it exists
