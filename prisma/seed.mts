@@ -16,6 +16,20 @@ async function main() {
     },
   });
   console.log("Seeded local-dev user");
+
+  // Grant permanent Pro plan to gurpreetkait
+  const updated = await prisma.user.updateMany({
+    where: { email: "gurpreetkait.codes@gmail.com" },
+    data: {
+      plan: "PRO",
+      planExpiresAt: new Date("2099-12-31T23:59:59Z"),
+    },
+  });
+  if (updated.count > 0) {
+    console.log("Granted permanent Pro plan to gurpreetkait.codes@gmail.com");
+  } else {
+    console.log("User gurpreetkait.codes@gmail.com not found yet — will be upgraded on next seed run after sign-in");
+  }
 }
 
 main()
