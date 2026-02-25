@@ -22,8 +22,27 @@ interface PublishButtonProps {
   videoTitle?: string;
   clipDuration?: number;
   disabled?: boolean;
+  /** Transcript text from captions for context-aware caption generation */
+  transcript?: string;
+  /** Language code of the video content (e.g. "en-IN", "hi-IN") */
+  language?: string;
   /** Called before publishing to regenerate clip with layout. Returns final clipFilename. */
   prepareClip?: () => Promise<string>;
+}
+
+function friendlyError(error: string): string {
+  const lower = error.toLowerCase();
+  if (lower.includes("token") || lower.includes("expired") || lower.includes("oauth"))
+    return "Your account token has expired. Please reconnect your account in Settings.";
+  if (lower.includes("tmpfiles") || lower.includes("upload"))
+    return "Upload service is temporarily unavailable. Please try again in a moment.";
+  if (lower.includes("not found") || lower.includes("404"))
+    return "Clip file not found. Please regenerate the clip and try again.";
+  if (lower.includes("limit") || lower.includes("403"))
+    return "You've reached your publish limit for this month. Upgrade to Pro for unlimited publishing.";
+  if (lower.includes("network") || lower.includes("fetch"))
+    return "Network error. Check your connection and try again.";
+  return error;
 }
 
 export default function PublishButton({
@@ -31,6 +50,8 @@ export default function PublishButton({
   videoTitle,
   clipDuration,
   disabled,
+  transcript,
+  language,
   prepareClip,
 }: PublishButtonProps) {
   const [open, setOpen] = useState(false);
@@ -52,6 +73,11 @@ export default function PublishButton({
   const handleOpen = async (isOpen: boolean) => {
     setOpen(isOpen);
     if (isOpen) {
+      // Reset state on open
+      setStatus("idle");
+      setError("");
+      setResults({});
+
       // Fetch YouTube channels
       try {
         const res = await fetch("/api/youtube-channels");
@@ -65,6 +91,11 @@ export default function PublishButton({
           setPublishTo((p) => ({ ...p, youtube: true }));
         }
       } catch {}
+
+      // Auto-generate caption if none exists
+      if (!caption && videoTitle) {
+        handleGenerateCaption();
+      }
     }
   };
 
@@ -79,6 +110,8 @@ export default function PublishButton({
           title: videoTitle,
           duration: clipDuration || 30,
           platform: publishTo.youtube ? "youtube" : "instagram",
+          transcript,
+          language,
         }),
       });
       const data = await res.json();
@@ -259,22 +292,32 @@ export default function PublishButton({
         {status === "success" && (
           <Alert>
             <CheckCircle className="h-4 w-4" />
-            <AlertDescription>
-              Published successfully!
-              {results.instagram && ` Instagram: ${results.instagram}`}
-              {results.youtube && (
-                <>
-                  {" "}
+            <AlertDescription className="space-y-2">
+              <p className="font-medium">Published successfully!</p>
+              <div className="flex flex-col gap-1.5">
+                {results.instagram && (
+                  <a
+                    href={`https://www.instagram.com/reel/${results.instagram}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1.5 text-sm text-pink-600 hover:text-pink-700 underline"
+                  >
+                    <Instagram className="h-3.5 w-3.5" />
+                    View on Instagram
+                  </a>
+                )}
+                {results.youtube && (
                   <a
                     href={`https://youtube.com/shorts/${results.youtube}`}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="underline"
+                    className="inline-flex items-center gap-1.5 text-sm text-red-600 hover:text-red-700 underline"
                   >
+                    <Youtube className="h-3.5 w-3.5" />
                     View on YouTube
                   </a>
-                </>
-              )}
+                )}
+              </div>
             </AlertDescription>
           </Alert>
         )}
@@ -282,8 +325,25 @@ export default function PublishButton({
         {status === "error" && (
           <Alert variant="destructive">
             <AlertCircle className="h-4 w-4" />
-            <AlertDescription>{error}</AlertDescription>
+            <AlertDescription>
+              <p>{friendlyError(error)}</p>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={handlePublish}
+                className="mt-2 text-xs"
+              >
+                Retry
+              </Button>
+            </AlertDescription>
           </Alert>
+        )}
+
+        {!caption && status === "idle" && (
+          <p className="text-xs text-amber-600">
+            No caption set. Your clip will be published without a description.
+          </p>
         )}
 
         <DialogFooter>

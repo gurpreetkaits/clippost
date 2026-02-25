@@ -21,6 +21,7 @@ model User {
   subscriptionId  String?  @unique
   plan            Plan     @default(FREE)
   planExpiresAt   DateTime?
+  trialEndsAt     DateTime?  // 7-day Pro trial end date
 
   // Preferences
   autoPostInstagram Boolean @default(false)
@@ -36,12 +37,13 @@ model User {
   // API access
   apiKey          String? @unique
 
-  instagramAccounts InstagramAccount[]
-  youtubeChannels   YouTubeChannel[]
-  videos            Video[]
-  clips             Clip[]
-  usageRecords      UsageRecord[]
-  billingEvents     BillingEvent[]
+  instagramAccounts  InstagramAccount[]
+  youtubeChannels    YouTubeChannel[]
+  videos             Video[]
+  clips              Clip[]
+  usageRecords       UsageRecord[]
+  billingEvents      BillingEvent[]
+  captionTemplates   CaptionTemplate[]
 
   @@map("users")
 }
@@ -147,6 +149,20 @@ enum UsageAction {
   CLIP_CREATED
   VIDEO_DOWNLOADED
   PUBLISH
+}
+
+model CaptionTemplate {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name      String
+  config    Json
+  isDefault Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@map("caption_templates")
 }
 
 model BillingEvent {

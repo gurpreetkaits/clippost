@@ -2,12 +2,18 @@ import fs from "fs";
 import path from "path";
 import { execFile } from "child_process";
 import { promisify } from "util";
+import OpenAI from "openai";
 import { CaptionSegment, CaptionWord } from "./ffmpeg";
 
 const execFileAsync = promisify(execFile);
 
 const SARVAM_API_URL = "https://api.sarvam.ai/speech-to-text";
 const MAX_CHUNK_SECS = 25; // Sarvam max is 30s, use 25 for safety
+
+// Track consecutive Sarvam failures for circuit breaker
+let sarvamFailureCount = 0;
+const SARVAM_CIRCUIT_BREAKER_THRESHOLD = 3;
+let sarvamCircuitOpenUntil = 0;
 /**
  * Maps simple language codes (en, hi, etc.) to Sarvam AI format (en-IN, hi-IN, etc.)
  */
@@ -124,93 +130,207 @@ async function getAudioDuration(audioPath: string): Promise<number> {
   return parseFloat(stdout.trim());
 }
 
+/**
+ * Fallback: transcribe using OpenAI Whisper when Sarvam is unavailable.
+ */
+async function transcribeWithWhisper(
+  audioPath: string,
+  languageCode: string,
+  audioDuration: number
+): Promise<CaptionSegment[]> {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) throw new Error("No fallback transcription available (OPENAI_API_KEY not set)");
+
+  const openai = new OpenAI({ apiKey });
+  const audioBuffer = fs.readFileSync(audioPath);
+  const file = new File([audioBuffer], path.basename(audioPath), { type: "audio/mpeg" });
+
+  // Map language code to ISO 639-1 for Whisper
+  const langMap: Record<string, string> = {
+    "en-IN": "en", "hi-IN": "hi", "bn-IN": "bn", "ta-IN": "ta",
+    "te-IN": "te", "ml-IN": "ml", "kn-IN": "kn", "mr-IN": "mr",
+    "gu-IN": "gu", "pa-IN": "pa", "ur-IN": "ur",
+  };
+  const whisperLang = langMap[languageCode] || languageCode.split("-")[0] || "en";
+
+  const response = await openai.audio.transcriptions.create({
+    model: "whisper-1",
+    file,
+    language: whisperLang,
+    response_format: "verbose_json",
+    timestamp_granularities: ["word"],
+  });
+
+  const words: CaptionWord[] = [];
+  if (response.words && response.words.length > 0) {
+    for (const w of response.words) {
+      words.push({
+        word: w.word,
+        start: w.start,
+        end: w.end,
+      });
+    }
+    // Mark as medium confidence (Whisper fallback)
+    const segments = groupWordsIntoSentences(words);
+    for (const seg of segments) {
+      seg.confidence = "medium";
+    }
+    return segments;
+  }
+
+  // No word-level timestamps, use text-based fallback
+  if (response.text) {
+    const segments = splitTranscriptIntoSegments(response.text, audioDuration);
+    for (const seg of segments) {
+      seg.confidence = "low";
+    }
+    return segments;
+  }
+
+  return [];
+}
+
+/**
+ * Detect language from audio using OpenAI Whisper (auto-detection).
+ * Returns ISO 639-1 language code.
+ */
+export async function detectLanguage(audioPath: string): Promise<string | null> {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) return null;
+
+  try {
+    const openai = new OpenAI({ apiKey });
+    const audioBuffer = fs.readFileSync(audioPath);
+    const file = new File([audioBuffer], path.basename(audioPath), { type: "audio/mpeg" });
+
+    const response = await openai.audio.transcriptions.create({
+      model: "whisper-1",
+      file,
+      response_format: "verbose_json",
+    });
+
+    return response.language || null;
+  } catch (error) {
+    console.error("Language detection failed:", error);
+    return null;
+  }
+}
+
 async function transcribeChunk(
   audioPath: string,
   languageCode: string,
   audioDuration: number
 ): Promise<CaptionSegment[]> {
+  // Check circuit breaker
+  const now = Date.now();
+  const sarvamAvailable = sarvamFailureCount < SARVAM_CIRCUIT_BREAKER_THRESHOLD || now > sarvamCircuitOpenUntil;
+
   const apiKey = process.env.SERVAM_AI;
-  if (!apiKey) throw new Error("SERVAM_AI API key not configured");
+  if (!apiKey || !sarvamAvailable) {
+    // No Sarvam key or circuit open — try Whisper fallback
+    console.log(sarvamAvailable ? "No Sarvam API key, using Whisper fallback" : "Sarvam circuit breaker open, using Whisper fallback");
+    return transcribeWithWhisper(audioPath, mapToSarvamLanguageCode(languageCode), audioDuration);
+  }
 
   // Map to Sarvam's expected format (e.g., "en" -> "en-IN")
   const sarvamLanguageCode = mapToSarvamLanguageCode(languageCode);
 
-  const audioBuffer = fs.readFileSync(audioPath);
-  const file = new File([audioBuffer], path.basename(audioPath), { type: "audio/mpeg" });
+  try {
+    const audioBuffer = fs.readFileSync(audioPath);
+    const file = new File([audioBuffer], path.basename(audioPath), { type: "audio/mpeg" });
 
-  const formData = new FormData();
-  formData.append("file", file);
-  formData.append("model", "saaras:v3");
-  formData.append("mode", "transcribe");
-  formData.append("language_code", sarvamLanguageCode);
-  formData.append("with_timestamps", "true");
+    const formData = new FormData();
+    formData.append("file", file);
+    formData.append("model", "saaras:v3");
+    formData.append("mode", "transcribe");
+    formData.append("language_code", sarvamLanguageCode);
+    formData.append("with_timestamps", "true");
 
-  const res = await fetch(SARVAM_API_URL, {
-    method: "POST",
-    headers: {
-      "api-subscription-key": apiKey,
-    },
-    body: formData,
-  });
+    const res = await fetch(SARVAM_API_URL, {
+      method: "POST",
+      headers: {
+        "api-subscription-key": apiKey,
+      },
+      body: formData,
+    });
 
-  if (!res.ok) {
-    const errText = await res.text();
-    console.error("Sarvam AI error:", res.status, errText);
-    throw new Error(`Sarvam AI error (${res.status}): ${errText}`);
-  }
+    if (!res.ok) {
+      const errText = await res.text();
+      console.error("Sarvam AI error:", res.status, errText);
+      throw new Error(`Sarvam AI error (${res.status}): ${errText}`);
+    }
 
-  const data: SarvamResponse = await res.json();
+    // Reset circuit breaker on success
+    sarvamFailureCount = 0;
 
-  console.log("Sarvam response:", JSON.stringify({
-    hasTimestamps: !!data.timestamps,
-    wordCount: data.timestamps?.words?.length ?? 0,
-    sampleWords: data.timestamps?.words?.slice(0, 5),
-    sampleStarts: data.timestamps?.start_time_seconds?.slice(0, 5),
-    sampleEnds: data.timestamps?.end_time_seconds?.slice(0, 5),
-    transcriptLength: data.transcript?.length ?? 0,
-  }));
+    const data: SarvamResponse = await res.json();
 
-  if (data.timestamps && data.timestamps.words.length > 0) {
-    // Sarvam may return multi-word entries — flatten them into individual words
-    const rawWords = data.timestamps.words;
-    const rawStarts = data.timestamps.start_time_seconds;
-    const rawEnds = data.timestamps.end_time_seconds;
+    if (data.timestamps && data.timestamps.words.length > 0) {
+      // Sarvam may return multi-word entries — flatten them into individual words
+      const rawWords = data.timestamps.words;
+      const rawStarts = data.timestamps.start_time_seconds;
+      const rawEnds = data.timestamps.end_time_seconds;
 
-    const words: CaptionWord[] = [];
+      const words: CaptionWord[] = [];
 
-    for (let i = 0; i < rawWords.length; i++) {
-      const entry = rawWords[i].trim();
-      const entryStart = rawStarts[i];
-      const entryEnd = rawEnds[i];
+      for (let i = 0; i < rawWords.length; i++) {
+        const entry = rawWords[i].trim();
+        const entryStart = rawStarts[i];
+        const entryEnd = rawEnds[i];
 
-      // If the entry contains spaces, it's a multi-word chunk — split it
-      const subWords = entry.split(/\s+/).filter((w) => w.length > 0);
-      if (subWords.length <= 1) {
-        words.push({ word: entry, start: entryStart, end: entryEnd });
-      } else {
-        // Distribute timing evenly across sub-words
-        const subDuration = (entryEnd - entryStart) / subWords.length;
-        for (let j = 0; j < subWords.length; j++) {
-          words.push({
-            word: subWords[j],
-            start: parseFloat((entryStart + j * subDuration).toFixed(2)),
-            end: parseFloat((entryStart + (j + 1) * subDuration).toFixed(2)),
-          });
+        // If the entry contains spaces, it's a multi-word chunk — split it
+        const subWords = entry.split(/\s+/).filter((w) => w.length > 0);
+        if (subWords.length <= 1) {
+          words.push({ word: entry, start: entryStart, end: entryEnd });
+        } else {
+          // Distribute timing evenly across sub-words — mark as lower confidence
+          const subDuration = (entryEnd - entryStart) / subWords.length;
+          for (let j = 0; j < subWords.length; j++) {
+            words.push({
+              word: subWords[j],
+              start: parseFloat((entryStart + j * subDuration).toFixed(2)),
+              end: parseFloat((entryStart + (j + 1) * subDuration).toFixed(2)),
+            });
+          }
         }
+      }
+
+      if (words.length > 0) {
+        const segments = groupWordsIntoSentences(words);
+        // Assign confidence based on whether timing was estimated
+        for (const seg of segments) {
+          const hasEstimatedWords = seg.words?.some((w, idx) => {
+            if (!seg.words || idx === 0) return false;
+            const prev = seg.words[idx - 1];
+            // Evenly distributed timing suggests estimation
+            return Math.abs((w.end - w.start) - (prev.end - prev.start)) < 0.001;
+          });
+          seg.confidence = hasEstimatedWords ? "medium" : "high";
+        }
+        return segments;
       }
     }
 
-    if (words.length > 0) {
-      return groupWordsIntoSentences(words);
+    // Fallback: no word timestamps — estimate timing from transcript text
+    if (data.transcript) {
+      const segments = splitTranscriptIntoSegments(data.transcript, audioDuration);
+      for (const seg of segments) {
+        seg.confidence = "low";
+      }
+      return segments;
     }
-  }
 
-  // Fallback: no word timestamps — estimate timing from transcript text
-  if (data.transcript) {
-    return splitTranscriptIntoSegments(data.transcript, audioDuration);
+    return [];
+  } catch (error) {
+    // Sarvam failed — increment circuit breaker and try Whisper
+    sarvamFailureCount++;
+    if (sarvamFailureCount >= SARVAM_CIRCUIT_BREAKER_THRESHOLD) {
+      sarvamCircuitOpenUntil = Date.now() + 5 * 60 * 1000; // 5 min cooldown
+      console.warn(`Sarvam circuit breaker opened after ${sarvamFailureCount} failures, cooldown 5 min`);
+    }
+    console.error("Sarvam failed, falling back to Whisper:", error);
+    return transcribeWithWhisper(audioPath, sarvamLanguageCode, audioDuration);
   }
-
-  return [];
 }
 
 async function splitAndTranscribe(

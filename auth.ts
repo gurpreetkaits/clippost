@@ -12,6 +12,10 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
       if (account) {
         // Dynamically import prisma to avoid Edge Runtime issues in middleware
         const { prisma } = await import("@/lib/db");
+        // Set 7-day Pro trial for new users
+        const trialEnd = new Date();
+        trialEnd.setDate(trialEnd.getDate() + 7);
+
         const user = await prisma.user.upsert({
           where: { googleId: account.providerAccountId },
           update: {
@@ -24,6 +28,9 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
             email: profile?.email,
             name: profile?.name,
             image: profile?.picture as string | undefined,
+            plan: "PRO",
+            trialEndsAt: trialEnd,
+            planExpiresAt: trialEnd,
           },
         });
         token.id = user.id;

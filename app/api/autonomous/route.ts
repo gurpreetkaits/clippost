@@ -164,7 +164,8 @@ export async function POST(request: NextRequest) {
           bestSegment = await findBestSegment(
             segments,
             purpose || undefined,
-            metadata.duration
+            metadata.duration,
+            language
           );
         } catch (error) {
           if (error instanceof AIRateLimitError) {
@@ -290,8 +291,14 @@ export async function POST(request: NextRequest) {
                 path.basename(clipFilename)
               );
 
+              // Build transcript text for caption generation
+              const clipTranscript = segments
+                .filter(s => s.end > bestSegment!.start && s.start < bestSegment!.end)
+                .map(s => s.text)
+                .join(" ");
+
               const caption = user.useAiCaptions
-                ? await generateCaption(metadata.title, bestSegment.end - bestSegment.start, "instagram")
+                ? await generateCaption(metadata.title, bestSegment.end - bestSegment.start, "instagram", clipTranscript, language)
                 : "";
 
               const publicUrl = await uploadToTmpFiles(clipPath);
@@ -349,8 +356,14 @@ export async function POST(request: NextRequest) {
               );
 
               const shortTitle = `${metadata.title} #Shorts`;
+              // Build transcript text for YouTube caption generation
+              const ytClipTranscript = segments
+                .filter(s => s.end > bestSegment!.start && s.start < bestSegment!.end)
+                .map(s => s.text)
+                .join(" ");
+
               const shortDesc = user.useAiCaptions
-                ? await generateCaption(metadata.title, bestSegment.end - bestSegment.start, "youtube")
+                ? await generateCaption(metadata.title, bestSegment.end - bestSegment.start, "youtube", ytClipTranscript, language)
                 : "";
 
               const videoId = await uploadToYouTubeShorts(

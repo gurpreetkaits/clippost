@@ -3,13 +3,14 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useSession, signIn, signOut } from "next-auth/react";
-import { Crown, Settings, Scissors, LogIn, LogOut, Film, MessageCircle } from "lucide-react";
+import { Crown, Settings, Scissors, LogIn, LogOut, Film, MessageCircle, Palette } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 
 const navLinks = [
   { href: "/pricing", label: "Pricing", icon: Crown, auth: false },
   { href: "/clips", label: "Clips", icon: Film, auth: true },
+  { href: "/templates", label: "Templates", icon: Palette, auth: true },
   { href: "/settings", label: "Settings", icon: Settings, auth: true },
 ] as const;
 

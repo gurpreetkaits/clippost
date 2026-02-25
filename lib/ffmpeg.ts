@@ -4,6 +4,7 @@ import path from "path";
 import fs from "fs";
 import { CaptionStyle, DEFAULT_CAPTION_STYLE } from "./caption-style";
 import { VideoLayout, getFrameConfig, REEL_WIDTH, REEL_HEIGHT } from "./video-layout";
+import { ReelTemplate, ZONE_ALIGNMENT_MAP } from "./caption-template";
 
 export type { CaptionStyle };
 export { DEFAULT_CAPTION_STYLE };
@@ -32,6 +33,7 @@ export interface CaptionSegment {
   end: number;
   text: string;
   words?: CaptionWord[];
+  confidence?: "high" | "medium" | "low"; // transcription confidence
 }
 
 // Convert hex color (#RRGGBB) to ASS color format (&HAABBGGRR)
@@ -155,6 +157,105 @@ function generateAssContent(
   return lines.join("\n");
 }
 
+function generateAssContentFromTemplate(
+  captions: CaptionSegment[],
+  clipStart: number,
+  width: number,
+  height: number,
+  template: ReelTemplate
+): string {
+  const t = template;
+  const fontSize = Math.round(t.fontSize * (height / 1920));
+
+  // Colors
+  const primaryColour = hexToAss(t.textColor, 100);
+  const secondaryColour = "&H00AAAAAA";
+
+  // BorderStyle 3 = opaque box, 1 = outline+shadow
+  const borderStyleVal = t.borderStyle === "box" ? 3 : 1;
+  let outlineColour: string;
+  let outlineVal: number;
+  let shadowVal: number;
+  let backColour: string;
+
+  if (t.borderStyle === "box") {
+    outlineColour = hexToAss(t.bgColor, t.bgOpacity);
+    outlineVal = Math.round(fontSize * 0.5); // box padding
+    shadowVal = 0;
+    backColour = "&H00000000";
+  } else {
+    outlineColour = hexToAss(t.shadowColor, 100);
+    outlineVal = t.outlineWidth;
+    shadowVal = t.shadowDistance;
+    backColour = hexToAss(t.shadowColor, 60);
+  }
+
+  const boldVal = t.bold ? 1 : 0;
+  const italicVal = t.italic ? 1 : 0;
+  const underlineVal = t.underline ? 1 : 0;
+  const alignment = ZONE_ALIGNMENT_MAP[t.zone];
+  const wrapStyleVal = t.wrapStyle === "smart" ? 0 : 2;
+
+  // Margins: use maxWidth to calculate left/right margins
+  const marginPct = (100 - t.maxWidth) / 2;
+  const marginLR = Math.round((width * marginPct) / 100);
+  const marginV = Math.round(height * 0.06);
+
+  const lines: string[] = [
+    "[Script Info]",
+    "ScriptType: v4.00+",
+    `PlayResX: ${width}`,
+    `PlayResY: ${height}`,
+    `WrapStyle: ${wrapStyleVal}`,
+    "",
+    "[V4+ Styles]",
+    "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
+    `Style: Default,${t.fontFamily},${fontSize},${primaryColour},${secondaryColour},${outlineColour},${backColour},${boldVal},${italicVal},${underlineVal},0,${t.scaleX},100,${t.letterSpacing},0,${borderStyleVal},${outlineVal},${shadowVal},${alignment},${marginLR},${marginLR},${marginV},1`,
+    "",
+    "[Events]",
+    "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
+  ];
+
+  // Build \pos override tag if posX/posY are set
+  const posOverride =
+    t.posX !== null && t.posY !== null
+      ? `{\\pos(${Math.round((t.posX / 100) * width)},${Math.round((t.posY / 100) * height)})}`
+      : "";
+
+  for (const caption of captions) {
+    const relStart = Math.max(0, caption.start - clipStart);
+    const relEnd = Math.max(0, caption.end - clipStart);
+    const startStr = formatAssTime(relStart);
+    const endStr = formatAssTime(relEnd);
+
+    // Apply text transform
+    const transformText = (text: string) => {
+      if (t.textTransform === "uppercase") return text.toUpperCase();
+      if (t.textTransform === "lowercase") return text.toLowerCase();
+      return text;
+    };
+
+    if (caption.words && caption.words.length > 0) {
+      let text = posOverride;
+      let prevTime = caption.start;
+      for (let i = 0; i < caption.words.length; i++) {
+        const word = caption.words[i];
+        const kCs = Math.max(0, Math.round((word.start - prevTime) * 100));
+        text += `{\\k${kCs}}${escapeAssText(transformText(word.word))}`;
+        if (i < caption.words.length - 1) text += " ";
+        prevTime = word.start;
+      }
+      lines.push(`Dialogue: 0,${startStr},${endStr},Default,,0,0,0,,${text}`);
+    } else {
+      lines.push(
+        `Dialogue: 0,${startStr},${endStr},Default,,0,0,0,,${posOverride}${escapeAssText(transformText(caption.text))}`
+      );
+    }
+  }
+
+  return lines.join("\n");
+}
+
 export async function extractFullAudio(
   userId: string,
   videoPath: string
@@ -240,7 +341,8 @@ export async function createClipWithCaptions(
   end: number,
   captions: CaptionSegment[],
   style?: CaptionStyle,
-  layout?: VideoLayout
+  layout?: VideoLayout,
+  template?: ReelTemplate
 ): Promise<string> {
   const userDir = getUserTmpDir(userId);
   const outputFilename = `clip_${Date.now()}_${Math.random().toString(36).slice(2)}.mp4`;
@@ -258,7 +360,9 @@ export async function createClipWithCaptions(
   const assWidth = isFrameMode ? width : (is916 ? REEL_WIDTH : width);
   const assHeight = isFrameMode ? height : (is916 ? REEL_HEIGHT : height);
 
-  const assContent = generateAssContent(captions, start, assWidth, assHeight, style);
+  const assContent = template
+    ? generateAssContentFromTemplate(captions, start, assWidth, assHeight, template)
+    : generateAssContent(captions, start, assWidth, assHeight, style);
   const assPath = path.join(
     userDir,
     `subs_${Date.now()}_${Math.random().toString(36).slice(2)}.ass`

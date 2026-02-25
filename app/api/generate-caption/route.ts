@@ -7,7 +7,7 @@ export async function POST(request: NextRequest) {
   if (authResult instanceof NextResponse) return authResult;
 
   try {
-    const { title, duration, platform } = await request.json();
+    const { title, duration, platform, transcript, language } = await request.json();
 
     if (!title) {
       return NextResponse.json(
@@ -19,7 +19,9 @@ export async function POST(request: NextRequest) {
     const caption = await generateCaption(
       title,
       duration || 30,
-      platform || "instagram"
+      platform || "instagram",
+      transcript,
+      language
     );
 
     return NextResponse.json({ caption });

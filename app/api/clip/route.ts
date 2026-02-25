@@ -6,6 +6,8 @@ import { requireAuth } from "@/lib/auth";
 import { splitLongSegments } from "@/lib/whisper";
 import { prisma } from "@/lib/db";
 import { checkUsageLimit } from "@/lib/usage";
+import { configToTemplate } from "@/lib/caption-template";
+import type { ReelTemplate } from "@/lib/caption-template";
 
 export async function POST(request: NextRequest) {
   const authResult = await requireAuth();
@@ -28,6 +30,7 @@ export async function POST(request: NextRequest) {
       captions,
       style,
       layout,
+      templateId,
     }: {
       filename: string;
       start: number;
@@ -35,6 +38,7 @@ export async function POST(request: NextRequest) {
       captions: CaptionSegment[];
       style?: CaptionStyle;
       layout?: VideoLayout;
+      templateId?: string;
     } = await request.json();
 
     if (!filename || start === undefined || end === undefined) {
@@ -51,6 +55,20 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // Fetch template if templateId is provided
+    let template: ReelTemplate | undefined;
+    if (templateId) {
+      const dbTemplate = await prisma.captionTemplate.findFirst({
+        where: { id: templateId, userId },
+      });
+      if (dbTemplate) {
+        template = configToTemplate(
+          dbTemplate.name,
+          dbTemplate.config as Omit<ReelTemplate, "name">
+        );
+      }
+    }
+
     const videoPath = getVideoPath(userId, filename);
     const shortCaptions = splitLongSegments(captions || []);
     const clipFilename = await createClipWithCaptions(
@@ -60,7 +78,8 @@ export async function POST(request: NextRequest) {
       end,
       shortCaptions,
       style,
-      layout
+      layout,
+      template
     );
 
     // Find the video record if it exists

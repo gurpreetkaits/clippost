@@ -29,6 +29,7 @@ interface ClipItem {
   hasCaptions: boolean;
   method: "MANUAL" | "AUTO_TRIM";
   publishedAt: string | null;
+  instagramMediaId: string | null;
   youtubeVideoId: string | null;
   createdAt: string;
   video: {
@@ -148,15 +149,32 @@ export default function ClipsPage() {
                         Captions
                       </Badge>
                     )}
-                    {clip.publishedAt && (
+                    {clip.publishedAt && clip.instagramMediaId && (
+                      <a
+                        href={`https://www.instagram.com/reel/${clip.instagramMediaId}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                      >
+                        <Badge variant="default" className="text-xs gap-1 cursor-pointer hover:opacity-80">
+                          <Instagram className="h-3 w-3" /> View Reel
+                        </Badge>
+                      </a>
+                    )}
+                    {clip.publishedAt && !clip.instagramMediaId && (
                       <Badge variant="default" className="text-xs gap-1">
                         <Instagram className="h-3 w-3" /> Published
                       </Badge>
                     )}
                     {clip.youtubeVideoId && (
-                      <Badge variant="default" className="text-xs gap-1">
-                        <Youtube className="h-3 w-3" /> YouTube
-                      </Badge>
+                      <a
+                        href={`https://youtube.com/shorts/${clip.youtubeVideoId}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                      >
+                        <Badge variant="default" className="text-xs gap-1 cursor-pointer hover:opacity-80">
+                          <Youtube className="h-3 w-3" /> View Short
+                        </Badge>
+                      </a>
                     )}
                   </div>
                   <div className="flex items-center gap-3 text-xs text-muted-foreground">

@@ -110,7 +110,8 @@ export async function POST(request: NextRequest) {
         const bestSegment = await findBestSegment(
           segments,
           purpose || undefined,
-          metadata.duration
+          metadata.duration,
+          transcriptionLanguage
         );
         progress("analyzing", `Found segment: ${bestSegment.reason}`, 75);
 

@@ -109,10 +109,44 @@ function trimSilenceFromBoundaries(
   return { start: adjustedStart, end: adjustedEnd };
 }
 
+/**
+ * Map a language code (e.g. "en-IN", "hi-IN", "en") to a human-readable name for GPT context.
+ */
+function languageLabel(code?: string): string {
+  if (!code) return "English";
+  const map: Record<string, string> = {
+    "en": "English", "en-IN": "English", "hi-IN": "Hindi", "bn-IN": "Bengali",
+    "kn-IN": "Kannada", "ml-IN": "Malayalam", "mr-IN": "Marathi", "od-IN": "Odia",
+    "pa-IN": "Punjabi", "ta-IN": "Tamil", "te-IN": "Telugu", "gu-IN": "Gujarati",
+  };
+  return map[code] || "English";
+}
+
+/**
+ * Detect segments that are likely music/non-speech based on low word density.
+ * Returns markers to insert into the transcript for GPT awareness.
+ */
+function detectLowSpeechRegions(segments: CaptionSegment[]): Map<number, string> {
+  const markers = new Map<number, string>();
+  for (let i = 0; i < segments.length; i++) {
+    const seg = segments[i];
+    const duration = seg.end - seg.start;
+    if (duration <= 0) continue;
+    const wordCount = seg.text.trim().split(/\s+/).length;
+    const wordsPerSecond = wordCount / duration;
+    // Very low speech density (< 0.5 words/sec over 3+ seconds) likely means music/non-speech
+    if (duration >= 3 && wordsPerSecond < 0.5) {
+      markers.set(i, `[LOW SPEECH / POSSIBLE MUSIC: ${duration.toFixed(1)}s with only ${wordCount} word(s)]`);
+    }
+  }
+  return markers;
+}
+
 export async function findBestSegment(
   segments: CaptionSegment[],
   purpose: string | undefined,
-  videoDuration: number
+  videoDuration: number,
+  language?: string
 ): Promise<SegmentResult> {
   // For short videos (≤40s), return the full range trimmed to actual speech
   if (videoDuration <= 40) {
@@ -127,10 +161,20 @@ export async function findBestSegment(
   // Detect silence gaps in the transcript
   const silenceGaps = detectSilenceGaps(segments);
 
-  // Build timestamped transcript for GPT with silence indicators
+  // Detect low-speech/music regions
+  const musicMarkers = detectLowSpeechRegions(segments);
+  const langName = languageLabel(language);
+
+  // Build timestamped transcript for GPT with silence + music indicators
   let transcript = "";
   for (let i = 0; i < segments.length; i++) {
     const seg = segments[i];
+
+    // Insert music/low-speech marker before the segment if detected
+    if (musicMarkers.has(i)) {
+      transcript += `${musicMarkers.get(i)}\n`;
+    }
+
     transcript += `[${formatTime(seg.start)} - ${formatTime(seg.end)}] ${seg.text}\n`;
 
     // Add silence indicators for gaps > 2 seconds
@@ -143,22 +187,49 @@ export async function findBestSegment(
     }
   }
 
-  const systemPrompt = purpose
-    ? `You are a video editor AI. Given a timestamped transcript and a user's purpose, find the single best continuous segment (15-60 seconds) that matches the purpose. The video is ${videoDuration} seconds long.
+  const languageNote = `\n\nLANGUAGE: This transcript is in ${langName}. You MUST understand and evaluate the ${langName} content for meaning, insight, and engagement. Do not treat non-English text as filler — read and understand it in its original language.`;
 
-CRITICAL: The selected segment must NOT contain significant silence gaps. Look for continuous speech without [SILENCE] markers, or only brief pauses (< 2s). The clip should be engaging from start to finish with minimal dead air.
+  const musicAvoidNote = `\nMUSIC/NON-SPEECH AVOIDANCE: Lines marked [LOW SPEECH / POSSIBLE MUSIC] indicate sections with very little actual speech (likely background music, intros, or instrumental breaks). NEVER select segments that fall within or overlap with these regions. Focus ONLY on sections with substantive spoken content.`;
+
+  const systemPrompt = purpose
+    ? `You are a video editor AI specializing in short-form viral content. Given a timestamped transcript and a user's purpose, find the single best continuous segment (15-60 seconds) that matches the purpose. The video is ${videoDuration} seconds long.${languageNote}
+
+CRITICAL RULES:
+1. The selected segment must NOT contain significant silence gaps. Avoid [SILENCE] markers. Only brief pauses (< 2s) are acceptable.
+2. The clip should be engaging from start to finish with minimal dead air.
+3. The segment must be self-contained — it should make sense without prior context.
+4. Pick the most INSIGHTFUL part — the segment with the strongest ideas, opinions, or information value.${musicAvoidNote}
+
+Prefer segments that start with a hook (question, bold statement, surprise), maintain energy throughout, and end with impact (punchline, key takeaway, or cliffhanger). Avoid segments that start mid-sentence or contain filler/introductory content.
 
 Return JSON with exactly these fields:
 - "start": number (seconds, must be >= 0)
 - "end": number (seconds, must be <= ${videoDuration})
 - "reason": string (1-2 sentence explanation of why this segment was chosen)
 
-The segment duration (end - start) must be between 15 and 60 seconds. Pick the most compelling, self-contained segment with continuous speech.`
-    : `You are a video editor AI. Find the single most compelling, viral-worthy continuous segment (15-60 seconds) from this transcript. The video is ${videoDuration} seconds long.
+The segment duration (end - start) must be between 15 and 60 seconds. Pick the most compelling, insightful, self-contained segment with continuous speech.`
+    : `You are a video editor AI specializing in short-form viral content. Find the single most compelling, viral-worthy continuous segment (15-60 seconds) from this transcript. The video is ${videoDuration} seconds long.${languageNote}
 
-CRITICAL: The selected segment must NOT contain significant silence gaps. Look for continuous speech without [SILENCE] markers, or only brief pauses (< 2s). The clip should be engaging from start to finish with minimal dead air.
+CRITICAL RULES:
+1. The selected segment must NOT contain significant silence gaps. Avoid [SILENCE] markers. Only brief pauses (< 2s) are acceptable.
+2. The clip should be engaging from start to finish with minimal dead air.${musicAvoidNote}
 
-Pick the part with the strongest hook, highest entertainment value, or most useful information. Prefer segments that start with an attention-grabbing moment and maintain energy throughout.
+ENGAGEMENT HEURISTICS — prioritize segments that:
+- **Contain the most insightful content**: Key ideas, unique perspectives, expert knowledge, or valuable information
+- **Start with a hook**: Questions ("Did you know...?", "What if...?"), bold claims, surprising statements, or direct audience address
+- **Have high speech density**: Rapid, energetic delivery with few pauses signals passion/expertise
+- **Contain emotional peaks**: Laughter, excitement, strong opinions, or storytelling climaxes
+- **Are self-contained**: The segment should make sense on its own without needing prior context
+- **End with impact**: Punchlines, key takeaways, cliffhangers, or call-to-actions make the best clip endings
+- **Feature topic shifts or reveals**: "But here's the thing..." or "The real reason is..." moments
+
+AVOID segments that:
+- Start mid-sentence or mid-thought
+- Are purely introductory ("Hey guys, welcome back...")
+- Contain only filler or meta-commentary about the video itself
+- Fall within or overlap [LOW SPEECH / POSSIBLE MUSIC] regions
+- Consist mostly of music, sound effects, or non-speech audio
+- Trail off without a clear endpoint
 
 Return JSON with exactly these fields:
 - "start": number (seconds, must be >= 0)
@@ -180,7 +251,7 @@ The segment duration (end - start) must be between 15 and 60 seconds.`;
         },
         {
           role: "user",
-          content: `${purpose ? `Purpose: ${purpose}\n\n` : ""}Transcript:\n${transcript}`,
+          content: `${purpose ? `Purpose: ${purpose}\n\n` : ""}Language: ${langName}\n\nTranscript:\n${transcript}`,
         },
       ],
     });
@@ -326,21 +397,31 @@ export function filterCaptionsForRange(
 export async function generateCaption(
   videoTitle: string,
   clipDuration: number,
-  platform: "instagram" | "youtube"
+  platform: "instagram" | "youtube",
+  transcript?: string,
+  language?: string
 ): Promise<string> {
   try {
+    const platformName = platform === "instagram" ? "Instagram Reel" : "YouTube Shorts";
+    const langName = languageLabel(language);
+    const langNote = language && language !== "en" && language !== "en-IN"
+      ? ` The clip content is in ${langName}. Write the caption in ${langName} (with English hashtags).`
+      : "";
+
+    const systemContent = transcript
+      ? `You are a social media content creator. Generate a short, engaging ${platformName} caption/description based on the actual clip content (transcript provided).${langNote} Include 3-5 relevant hashtags at the end. Keep the caption under 150 characters (excluding hashtags). Be catchy and specific to what's said in the clip. Do not use emojis excessively.`
+      : `You are a social media content creator. Generate a short, engaging ${platformName} caption/description for a video clip.${langNote} Include 3-5 relevant hashtags at the end. Keep it under 150 characters (excluding hashtags). Be catchy and use the video title as context. Do not use emojis excessively.`;
+
+    const userContent = transcript
+      ? `Video: "${videoTitle}" (${Math.round(clipDuration)}s clip)\nLanguage: ${langName}\n\nTranscript of this clip:\n${transcript.slice(0, 1000)}`
+      : `Video: "${videoTitle}" (${Math.round(clipDuration)}s clip)\nLanguage: ${langName}`;
+
     const response = await openai.chat.completions.create({
       model: "gpt-4o-mini",
       temperature: 0.7,
       messages: [
-        {
-          role: "system",
-          content: `You are a social media content creator. Generate a short, engaging ${platform === "instagram" ? "Instagram Reel" : "YouTube Shorts"} caption/description for a video clip. Include 3-5 relevant hashtags at the end. Keep it under 150 characters (excluding hashtags). Be catchy and use the video title as context. Do not use emojis excessively.`,
-        },
-        {
-          role: "user",
-          content: `Video: "${videoTitle}" (${Math.round(clipDuration)}s clip)`,
-        },
+        { role: "system", content: systemContent },
+        { role: "user", content: userContent },
       ],
     });
 

@@ -10,6 +10,9 @@ import ClipSelector from "@/components/ClipSelector";
 import CaptionEditor from "@/components/CaptionEditor";
 
 import CaptionStyleEditor from "@/components/CaptionStyleEditor";
+import TemplatePicker from "@/components/TemplatePicker";
+import { useUndo } from "@/lib/hooks/use-undo";
+import { useDraft } from "@/lib/hooks/use-draft";
 import PublishButton from "@/components/PublishButton";
 import DemoVideo from "@/components/DemoVideo";
 import {
@@ -39,6 +42,8 @@ import {
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { CaptionStyle, DEFAULT_CAPTION_STYLE } from "@/lib/caption-style";
+import { templateToCaptionStyle } from "@/lib/caption-template";
+import type { ReelTemplate } from "@/lib/caption-template";
 import {
   VideoLayout,
   DEFAULT_LAYOUT,
@@ -262,6 +267,19 @@ function HomeContent() {
   // Language
   const [language, setLanguage] = useState("en");
 
+  // Fetch user preferences on mount and apply as defaults
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    fetch("/api/settings/preferences")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((prefs) => {
+        if (!prefs) return;
+        if (prefs.defaultLanguage) setLanguage(prefs.defaultLanguage);
+        if (prefs.autonomousMode) setAutoTrim(true);
+      })
+      .catch(() => {});
+  }, [isAuthenticated]);
+
   // Auto-trim state
   const [progress, setProgress] = useState<ProgressState | null>(null);
   const [autoTrimResult, setAutoTrimResult] = useState<AutoTrimResult | null>(null);
@@ -285,11 +303,33 @@ function HomeContent() {
   const [end, setEnd] = useState(30);
   const [playing, setPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
-  const [captions, setCaptions] = useState<CaptionSegment[]>([]);
+  const captionUndo = useUndo<CaptionSegment[]>([]);
+  const captions = captionUndo.state;
+  const setCaptions = captionUndo.set;
+  const { saveDraft, loadDraft, clearDraft } = useDraft();
   const [clipFilename, setClipFilename] = useState<string | null>(null);
   const [captionStyle, setCaptionStyle] = useState<CaptionStyle>(DEFAULT_CAPTION_STYLE);
+  const [activeTemplateId, setActiveTemplateId] = useState<string | undefined>();
   const [transcribing, setTranscribing] = useState(false);
   const [generating, setGenerating] = useState(false);
+
+  // Auto-save draft when editor state changes
+  useEffect(() => {
+    if (!videoData || captions.length === 0) return;
+    saveDraft({
+      url: url || "",
+      start,
+      end,
+      language,
+      captions,
+      captionStyle,
+    });
+  }, [captions, captionStyle, start, end, saveDraft, videoData, url, language]);
+
+  // Clear draft on successful clip generation
+  useEffect(() => {
+    if (clipFilename) clearDraft();
+  }, [clipFilename, clearDraft]);
 
   // Load clip for editing from query param
   useEffect(() => {
@@ -509,6 +549,7 @@ function HomeContent() {
           end,
           captions: finalCaptions,
           style: captionStyle,
+          templateId: activeTemplateId,
         }),
       });
 
@@ -524,7 +565,7 @@ function HomeContent() {
     } finally {
       setGenerating(false);
     }
-  }, [videoData, start, end, captions, captionStyle, language]);
+  }, [videoData, start, end, captions, captionStyle, language, activeTemplateId]);
 
   const router = useRouter();
 
@@ -686,7 +727,7 @@ function HomeContent() {
                                 </Button>
                               </a>
                               <div className="flex-1">
-                                <PublishButton clipFilename={clip.filename} videoTitle={videoData.title} clipDuration={clip.duration} />
+                                <PublishButton clipFilename={clip.filename} videoTitle={videoData.title} clipDuration={clip.duration} language={language} />
                               </div>
                             </div>
                           </CardContent>
@@ -745,6 +786,8 @@ function HomeContent() {
                           clipFilename={clipFilename!}
                           videoTitle={videoData.title}
                           clipDuration={end - start}
+                          transcript={captions.map(c => c.text).join(" ")}
+                          language={language}
                         />
                       </div>
                     </div>
@@ -841,20 +884,48 @@ function HomeContent() {
                     <CardTitle className="text-sm">Captions</CardTitle>
                   </CardHeader>
                   <CardContent>
-                    <CaptionEditor captions={captions} onUpdate={setCaptions} />
+                    <CaptionEditor
+                      captions={captions}
+                      onUpdate={setCaptions}
+                      onUndo={captionUndo.undo}
+                      onRedo={captionUndo.redo}
+                      canUndo={captionUndo.canUndo}
+                      canRedo={captionUndo.canRedo}
+                    />
                   </CardContent>
                 </Card>
 
-                {/* Style */}
-                <CaptionStyleEditor style={captionStyle} onChange={setCaptionStyle} />
+                {/* Template Picker + Style */}
+                <Card>
+                  <CardContent className="pt-4 pb-2">
+                    <TemplatePicker
+                      onSelect={(template: ReelTemplate, id?: string) => {
+                        setCaptionStyle(templateToCaptionStyle(template));
+                        setActiveTemplateId(id);
+                      }}
+                    />
+                  </CardContent>
+                </Card>
+                <CaptionStyleEditor style={captionStyle} onChange={(s) => {
+                  setCaptionStyle(s);
+                  setActiveTemplateId(undefined);
+                }} />
 
                 {/* Live Caption Preview */}
                 <div className="rounded-lg border overflow-hidden">
                   <p className="text-xs font-medium text-muted-foreground px-4 pt-3 pb-2">Preview</p>
-                  <div className="flex justify-center px-4 pb-4">
-                    <div className="w-full rounded-lg bg-neutral-900 flex justify-center p-6">
+                  <div className="flex px-4 pb-4">
+                    <div
+                      className="w-full rounded-lg bg-neutral-900 relative p-6"
+                      style={{
+                        display: "flex",
+                        justifyContent: captionStyle.position === "bottom" || captionStyle.position === "top" ? "center" : "center",
+                        alignItems: captionStyle.position === "top" ? "flex-start" : captionStyle.position === "center" ? "center" : "flex-end",
+                        minHeight: "120px",
+                      }}
+                    >
                       <span
-                        className="rounded-md text-center leading-relaxed"
+                        className="rounded-md text-center leading-relaxed max-w-[90%]"
                         style={{
                           fontFamily: captionStyle.fontFamily,
                           fontSize: `${Math.min(captionStyle.fontSize * 0.5, 28)}px`,
@@ -863,6 +934,7 @@ function HomeContent() {
                           fontWeight: captionStyle.bold ? "bold" : "normal",
                           fontStyle: captionStyle.italic ? "italic" : "normal",
                           padding: "6px 14px",
+                          wordBreak: "break-word",
                         }}
                       >
                         {previewText}
@@ -1283,6 +1355,7 @@ function HomeContent() {
                       clipFilename={autoTrimResult.clipFilename}
                       videoTitle={autoTrimResult.title}
                       clipDuration={autoTrimResult.end - autoTrimResult.start}
+                      language={language}
                       prepareClip={autoTrimLayout.format !== "original" ? regenerateWithLayout : undefined}
                     />
                   </div>

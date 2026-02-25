@@ -49,6 +49,7 @@ export async function GET(request: NextRequest) {
       hasCaptions: clip.hasCaptions,
       method: clip.method,
       publishedAt: clip.publishedAt,
+      instagramMediaId: clip.instagramMediaId,
       youtubeVideoId: clip.youtubeVideoId,
       createdAt: clip.createdAt,
       video: clip.video

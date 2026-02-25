@@ -512,6 +512,7 @@ export default function ClipEditorPage() {
                     clipFilename={clipFilename}
                     videoTitle={videoTitle}
                     clipDuration={clipDuration}
+                    language={language}
                     prepareClip={prepareClip}
                   />
                 </div>
