@@ -8,6 +8,7 @@ import { prisma } from "@/lib/db";
 import { checkUsageLimit } from "@/lib/usage";
 import { configToTemplate } from "@/lib/caption-template";
 import type { ReelTemplate } from "@/lib/caption-template";
+import type { ColorGradingParams } from "@/lib/color-grading";
 
 export async function POST(request: NextRequest) {
   const authResult = await requireAuth();
@@ -32,6 +33,8 @@ export async function POST(request: NextRequest) {
       layout,
       templateId,
       textOverlays,
+      colorGrading,
+      enhance,
     }: {
       filename: string;
       start: number;
@@ -41,6 +44,8 @@ export async function POST(request: NextRequest) {
       layout?: VideoLayout;
       templateId?: string;
       textOverlays?: TextOverlay[];
+      colorGrading?: ColorGradingParams;
+      enhance?: boolean;
     } = await request.json();
 
     if (!filename || start === undefined || end === undefined) {
@@ -82,7 +87,9 @@ export async function POST(request: NextRequest) {
       style,
       layout,
       template,
-      textOverlays
+      textOverlays,
+      colorGrading,
+      enhance
     );
 
     // Find the video record if it exists (by youtubeId or filename)

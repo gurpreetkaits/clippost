@@ -3,7 +3,6 @@
 import { useRef, useState, useCallback, useEffect } from "react";
 import dynamic from "next/dynamic";
 import type { VideoPlayerHandle } from "@/components/VideoPlayer";
-import CaptionPreview from "@/components/CaptionPreview";
 import { Button } from "@/components/ui/button";
 import {
   Play,
@@ -16,26 +15,11 @@ import {
   VolumeX,
 } from "lucide-react";
 import { CaptionStyle } from "@/lib/caption-style";
-import { VideoLayout, getFrameConfig } from "@/lib/video-layout";
+import type { CaptionSegment } from "@/lib/types/editor";
 
 const VideoPlayer = dynamic(() => import("@/components/VideoPlayer"), {
   ssr: false,
 });
-
-interface CaptionSegment {
-  start: number;
-  end: number;
-  text: string;
-}
-
-interface TextOverlay {
-  id: string;
-  text: string;
-  x: number;
-  y: number;
-  fontSize: number;
-  color: string;
-}
 
 interface VideoPreviewPanelProps {
   videoUrl: string;
@@ -48,74 +32,24 @@ interface VideoPreviewPanelProps {
   captions: CaptionSegment[];
   captionStyle: CaptionStyle;
   clipFilename: string | null;
+  enhancedFilename: string | null;
+  gradedFilename: string | null;
   generating: boolean;
-  layout?: VideoLayout;
-  textOverlays: TextOverlay[];
-  onTextOverlayMove: (id: string, x: number, y: number) => void;
 }
 
-/* ---------- Draggable text overlay ---------- */
+/* ---------- Caption position helpers ---------- */
 
-function DraggableOverlay({
-  overlay,
-  canvasRef,
-  onMove,
-}: {
-  overlay: TextOverlay;
-  canvasRef: React.RefObject<HTMLDivElement | null>;
-  onMove: (x: number, y: number) => void;
-}) {
-  const elRef = useRef<HTMLDivElement>(null);
-  const dragging = useRef(false);
-  const offset = useRef({ x: 0, y: 0 });
+const POSITION_MAP: Record<string, { x: number; y: number }> = {
+  top: { x: 50, y: 6 },
+  center: { x: 50, y: 50 },
+  bottom: { x: 50, y: 88 },
+};
 
-  const handlePointerDown = useCallback((e: React.PointerEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    dragging.current = true;
-    const el = elRef.current;
-    if (!el) return;
-    const rect = el.getBoundingClientRect();
-    offset.current = { x: e.clientX - rect.left, y: e.clientY - rect.top };
-    (e.target as HTMLElement).setPointerCapture(e.pointerId);
-  }, []);
-
-  const handlePointerMove = useCallback(
-    (e: React.PointerEvent) => {
-      if (!dragging.current || !canvasRef.current) return;
-      const canvas = canvasRef.current.getBoundingClientRect();
-      const x =
-        ((e.clientX - canvas.left - offset.current.x) / canvas.width) * 100;
-      const y =
-        ((e.clientY - canvas.top - offset.current.y) / canvas.height) * 100;
-      onMove(Math.max(0, Math.min(90, x)), Math.max(0, Math.min(90, y)));
-    },
-    [canvasRef, onMove]
-  );
-
-  const handlePointerUp = useCallback(() => {
-    dragging.current = false;
-  }, []);
-
-  return (
-    <div
-      ref={elRef}
-      onPointerDown={handlePointerDown}
-      onPointerMove={handlePointerMove}
-      onPointerUp={handlePointerUp}
-      className="absolute cursor-grab active:cursor-grabbing select-none touch-none z-20 hover:ring-2 hover:ring-blue-400 hover:ring-offset-1 rounded px-2 py-1 transition-shadow"
-      style={{
-        left: `${overlay.x}%`,
-        top: `${overlay.y}%`,
-        fontSize: `${overlay.fontSize}px`,
-        color: overlay.color,
-        textShadow: "0 1px 4px rgba(0,0,0,0.8)",
-        fontWeight: "bold",
-      }}
-    >
-      {overlay.text}
-    </div>
-  );
+function getCaptionPosition(style: CaptionStyle): { x: number; y: number } {
+  if (style.position === "custom" && style.customX != null && style.customY != null) {
+    return { x: style.customX, y: style.customY };
+  }
+  return POSITION_MAP[style.position] || POSITION_MAP.bottom;
 }
 
 /* ---------- Progress / scrub bar ---------- */
@@ -125,7 +59,7 @@ function ScrubBar({
   onScrub,
   onScrubEnd,
 }: {
-  progress: number; // 0-1
+  progress: number;
   onScrub: (pct: number) => void;
   onScrubEnd: () => void;
 }) {
@@ -171,15 +105,12 @@ function ScrubBar({
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}
     >
-      {/* Track bg */}
       <div className="absolute inset-x-0 h-1 group-hover:h-1.5 bg-white/20 rounded-full transition-all">
-        {/* Filled */}
         <div
           className="absolute left-0 top-0 bottom-0 bg-white rounded-full transition-[width] duration-75"
           style={{ width: `${pct}%` }}
         />
       </div>
-      {/* Thumb */}
       <div
         className="absolute h-3 w-3 bg-white rounded-full shadow-md opacity-0 group-hover:opacity-100 transition-opacity -translate-x-1/2 -translate-y-1/2 top-1/2 pointer-events-none"
         style={{ left: `${pct}%` }}
@@ -205,10 +136,9 @@ export default function VideoPreviewPanel({
   captions,
   captionStyle,
   clipFilename,
+  enhancedFilename,
+  gradedFilename,
   generating,
-  layout,
-  textOverlays,
-  onTextOverlayMove,
 }: VideoPreviewPanelProps) {
   const canvasRef = useRef<HTMLDivElement>(null);
   const wrapperRef = useRef<HTMLDivElement>(null);
@@ -217,68 +147,85 @@ export default function VideoPreviewPanel({
   const clipUrl = clipFilename
     ? `/api/video?file=${encodeURIComponent(clipFilename)}`
     : null;
-  const is916 = layout?.format === "9:16";
+  const enhancedUrl = enhancedFilename
+    ? `/api/video?file=${encodeURIComponent(enhancedFilename)}`
+    : null;
+  const gradedUrl = gradedFilename
+    ? `/api/video?file=${encodeURIComponent(gradedFilename)}`
+    : null;
+
   const showingClip = !!clipUrl;
-  const activeUrl = clipUrl || videoUrl;
-  const activeStart = showingClip ? 0 : start;
-  const activeEnd = showingClip ? end - start : end;
+  const showingProcessed = !showingClip && !!(enhancedUrl || gradedUrl);
+  const activeUrl = clipUrl || enhancedUrl || gradedUrl || videoUrl;
+  const activeStart = showingClip || showingProcessed ? 0 : start;
+  const activeEnd = showingClip || showingProcessed ? end - start : end;
   const clipDuration = end - start;
 
-  // Relative time for display/scrub (0 to clipDuration)
-  const relativeTime = showingClip ? currentTime : currentTime - start;
+  const relativeTime = showingClip || showingProcessed ? currentTime : currentTime - start;
 
-  // Local scrub override for instant feedback
   const [scrubTime, setScrubTime] = useState<number | null>(null);
   const displayRelTime = scrubTime !== null ? scrubTime : relativeTime;
 
-  // Volume & speed state
   const [volume, setVolume] = useState(1);
   const [muted, setMuted] = useState(false);
   const [speed, setSpeed] = useState(1);
   const [isFullscreen, setIsFullscreen] = useState(false);
 
-  // Fullscreen tracking
+  const [containerHeight, setContainerHeight] = useState(360);
+
+  useEffect(() => {
+    const el = canvasRef.current;
+    if (!el) return;
+    const obs = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        setContainerHeight(entry.contentRect.height);
+      }
+    });
+    obs.observe(el);
+    setContainerHeight(el.clientHeight);
+    return () => obs.disconnect();
+  }, []);
+
   useEffect(() => {
     const handler = () => setIsFullscreen(!!document.fullscreenElement);
     document.addEventListener("fullscreenchange", handler);
     return () => document.removeEventListener("fullscreenchange", handler);
   }, []);
 
-  // --- Handlers ---
+  const activeCaption = captions.find(
+    (c) => currentTime >= c.start && currentTime <= c.end
+  );
 
   const handleClickVideo = useCallback(() => {
     onPlayingChange(!playing);
   }, [playing, onPlayingChange]);
 
   const handleSkipBack = useCallback(() => {
-    const t = showingClip ? 0 : start;
+    const t = showingClip || showingProcessed ? 0 : start;
     playerRef.current?.seek(t);
     onProgress(t);
-  }, [showingClip, start, onProgress]);
+  }, [showingClip, showingProcessed, start, onProgress]);
 
   const handleScrub = useCallback(
     (pct: number) => {
       const relT = pct * clipDuration;
       setScrubTime(relT);
-      const absT = showingClip ? relT : start + relT;
+      const absT = showingClip || showingProcessed ? relT : start + relT;
       playerRef.current?.seek(absT);
     },
-    [clipDuration, showingClip, start]
+    [clipDuration, showingClip, showingProcessed, start]
   );
 
   const handleScrubEnd = useCallback(() => {
     setScrubTime(null);
   }, []);
 
-  const handleVolumeChange = useCallback(
-    (v: number) => {
-      setVolume(v);
-      setMuted(v === 0);
-      playerRef.current?.setVolume(v);
-      playerRef.current?.setMuted(v === 0);
-    },
-    []
-  );
+  const handleVolumeChange = useCallback((v: number) => {
+    setVolume(v);
+    setMuted(v === 0);
+    playerRef.current?.setVolume(v);
+    playerRef.current?.setMuted(v === 0);
+  }, []);
 
   const handleToggleMute = useCallback(() => {
     const next = !muted;
@@ -305,7 +252,6 @@ export default function VideoPreviewPanel({
   // Keyboard shortcuts
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      // Don't capture when typing in inputs
       const tag = (e.target as HTMLElement).tagName;
       if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
 
@@ -317,7 +263,7 @@ export default function VideoPreviewPanel({
         case "ArrowLeft": {
           e.preventDefault();
           const t = Math.max(0, relativeTime - 5);
-          const absT = showingClip ? t : start + t;
+          const absT = showingClip || showingProcessed ? t : start + t;
           playerRef.current?.seek(absT);
           onProgress(absT);
           break;
@@ -325,7 +271,7 @@ export default function VideoPreviewPanel({
         case "ArrowRight": {
           e.preventDefault();
           const t = Math.min(clipDuration, relativeTime + 5);
-          const absT = showingClip ? t : start + t;
+          const absT = showingClip || showingProcessed ? t : start + t;
           playerRef.current?.seek(absT);
           onProgress(absT);
           break;
@@ -349,6 +295,7 @@ export default function VideoPreviewPanel({
     relativeTime,
     clipDuration,
     showingClip,
+    showingProcessed,
     start,
     onProgress,
     handleToggleMute,
@@ -357,89 +304,71 @@ export default function VideoPreviewPanel({
 
   const progress = clipDuration > 0 ? displayRelTime / clipDuration : 0;
 
+  // Caption styling
+  const scale = containerHeight / 1080;
+  const captionPos = getCaptionPosition(captionStyle);
+
+  const bgAlpha = Math.round((captionStyle.bgOpacity / 100) * 255)
+    .toString(16)
+    .padStart(2, "0");
+  const scaledFontSize = Math.max(10, Math.round(captionStyle.fontSize * scale));
+  const scaledPadX = Math.round(Math.max(4, captionStyle.fontSize * 0.35 * scale));
+  const scaledPadY = Math.round(Math.max(2, captionStyle.fontSize * 0.2 * scale));
+
+  const isPresetPosition = captionStyle.position !== "custom";
+
   return (
     <div
       ref={wrapperRef}
       className="flex flex-col items-center justify-center w-full h-full gap-2 px-2 sm:px-4 bg-neutral-950"
     >
-      {/* Canvas area — video + overlays */}
+      {/* Canvas area */}
       <div
         ref={canvasRef}
-        className={`relative w-full overflow-hidden rounded-lg ${
-          is916 && showingClip ? "max-w-sm mx-auto" : "max-w-full"
-        }`}
-        style={
-          is916 && showingClip
-            ? { aspectRatio: "9/16", maxHeight: "calc(100% - 80px)" }
-            : { maxHeight: "calc(100% - 80px)" }
-        }
+        className="relative w-full overflow-hidden rounded-lg max-w-full"
+        style={{ maxHeight: "calc(100% - 80px)" }}
       >
         {/* Video layer */}
-        <div
-          className={`relative w-full h-full ${is916 && showingClip ? "bg-black" : ""}`}
-          style={
-            is916 && showingClip && layout.frame !== "fill"
-              ? {
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                }
-              : {}
-          }
-        >
-          {is916 && showingClip && layout.frame !== "fill" ? (
-            <div
-              style={{
-                width: `${getFrameConfig(layout.frame).videoWidthPct}%`,
-                borderRadius: `${getFrameConfig(layout.frame).radiusPct}%`,
-                overflow: "hidden",
-              }}
-            >
-              <VideoPlayer
-                key={clipFilename || "source"}
-                url={activeUrl}
-                start={activeStart}
-                end={activeEnd}
-                playing={playing}
-                onProgress={onProgress}
-                onClickVideo={handleClickVideo}
-                fill={false}
-                playerRef={playerRef}
-              />
-            </div>
-          ) : (
-            <VideoPlayer
-              key={clipFilename || "source"}
-              url={activeUrl}
-              start={activeStart}
-              end={activeEnd}
-              playing={playing}
-              onProgress={onProgress}
-              onClickVideo={handleClickVideo}
-              fill={is916 && showingClip}
-              playerRef={playerRef}
-            />
-          )}
+        <div className="relative w-full h-full">
+          <VideoPlayer
+            key={clipFilename || enhancedFilename || gradedFilename || "source"}
+            url={activeUrl}
+            start={activeStart}
+            end={activeEnd}
+            playing={playing}
+            onProgress={onProgress}
+            onClickVideo={handleClickVideo}
+            fill={false}
+            playerRef={playerRef}
+          />
         </div>
 
         {/* Caption overlay */}
-        {!showingClip && captions.length > 0 && (
-          <CaptionPreview
-            captions={captions}
-            currentTime={currentTime}
-            style={captionStyle}
-          />
+        {!showingClip && activeCaption && (
+          <div
+            className="absolute pointer-events-none z-10"
+            style={{
+              left: isPresetPosition ? `${captionPos.x}%` : `${captionPos.x}%`,
+              top: `${captionPos.y}%`,
+              transform: isPresetPosition ? "translateX(-50%)" : "translate(-50%, -50%)",
+            }}
+          >
+            <div
+              className="rounded-lg text-center whitespace-nowrap"
+              style={{
+                fontFamily: captionStyle.fontFamily,
+                fontSize: `${scaledFontSize}px`,
+                padding: `${scaledPadY}px ${scaledPadX}px`,
+                color: captionStyle.textColor,
+                backgroundColor: `${captionStyle.bgColor}${bgAlpha}`,
+                fontWeight: captionStyle.bold ? "bold" : "normal",
+                fontStyle: captionStyle.italic ? "italic" : "normal",
+              }}
+            >
+              {activeCaption.text}
+            </div>
+          </div>
         )}
-
-        {/* Draggable text overlays */}
-        {textOverlays.map((overlay) => (
-          <DraggableOverlay
-            key={overlay.id}
-            overlay={overlay}
-            canvasRef={canvasRef}
-            onMove={(x, y) => onTextOverlayMove(overlay.id, x, y)}
-          />
-        ))}
 
         {/* Generating overlay */}
         {generating && (
@@ -454,16 +383,13 @@ export default function VideoPreviewPanel({
 
       {/* Custom controls */}
       <div className="w-full max-w-3xl shrink-0 space-y-0.5">
-        {/* Scrub bar */}
         <ScrubBar
           progress={progress}
           onScrub={handleScrub}
           onScrubEnd={handleScrubEnd}
         />
 
-        {/* Buttons row */}
         <div className="flex items-center gap-0.5">
-          {/* Skip back */}
           <Button
             variant="ghost"
             size="icon"
@@ -473,7 +399,6 @@ export default function VideoPreviewPanel({
             <SkipBack className="h-4 w-4" />
           </Button>
 
-          {/* Play / Pause */}
           <Button
             variant="ghost"
             size="icon"
@@ -487,14 +412,12 @@ export default function VideoPreviewPanel({
             )}
           </Button>
 
-          {/* Timecode */}
           <span className="text-[11px] text-white/60 font-mono tabular-nums ml-1 select-none">
             {formatTimestamp(displayRelTime)}{" "}
             <span className="text-white/30">/</span>{" "}
             {formatTimestamp(clipDuration)}
           </span>
 
-          {/* Spacer */}
           <div className="flex-1" />
 
           {/* Volume */}
@@ -524,7 +447,6 @@ export default function VideoPreviewPanel({
             />
           </div>
 
-          {/* Speed */}
           <button
             onClick={handleCycleSpeed}
             className="px-1.5 py-0.5 text-[11px] font-medium text-white/60 hover:text-white hover:bg-white/10 rounded transition-colors tabular-nums select-none"
@@ -532,7 +454,6 @@ export default function VideoPreviewPanel({
             {speed === 1 ? "1x" : `${speed}x`}
           </button>
 
-          {/* Fullscreen */}
           <Button
             variant="ghost"
             size="icon"

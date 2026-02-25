@@ -5,13 +5,7 @@ import CaptionTimeline from "@/components/CaptionTimeline";
 import CaptionEditor from "@/components/CaptionEditor";
 import { useState } from "react";
 import { ChevronDown } from "lucide-react";
-
-interface CaptionSegment {
-  start: number;
-  end: number;
-  text: string;
-  words?: { word: string; start: number; end: number }[];
-}
+import type { CaptionSegment } from "@/lib/types/editor";
 
 interface BottomToolbarProps {
   // Range

@@ -1,45 +1,39 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useSession, signIn } from "next-auth/react";
 import CaptionStyleEditor from "@/components/CaptionStyleEditor";
 import TemplatePicker from "@/components/TemplatePicker";
 import LayoutSelector from "@/components/editor/LayoutSelector";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Lock, Loader2, ChevronDown, Plus, Trash2, Type } from "lucide-react";
+import { Lock, Loader2, ChevronDown, Plus, Trash2, Type, Palette, X } from "lucide-react";
 import { CaptionStyle } from "@/lib/caption-style";
 import type { ReelTemplate } from "@/lib/caption-template";
 import { VideoLayout } from "@/lib/video-layout";
 import { LANGUAGES } from "@/lib/languages";
-
-interface CaptionSegment {
-  start: number;
-  end: number;
-  text: string;
-}
-
-interface TextOverlay {
-  id: string;
-  text: string;
-  x: number;
-  y: number;
-  fontSize: number;
-  color: string;
-}
+import type { CaptionSegment, TextOverlay, SelectedElement } from "@/lib/types/editor";
 
 function Section({
   title,
   defaultOpen = true,
+  forceOpen,
   children,
   action,
 }: {
   title: string;
   defaultOpen?: boolean;
+  forceOpen?: boolean;
   children: React.ReactNode;
   action?: React.ReactNode;
 }) {
   const [open, setOpen] = useState(defaultOpen);
+
+  // Force open when forceOpen changes to true
+  useEffect(() => {
+    if (forceOpen) setOpen(true);
+  }, [forceOpen]);
+
   return (
     <div className="border-b border-border last:border-b-0">
       <div className="flex items-center">
@@ -75,6 +69,13 @@ interface PropertiesPanelProps {
   onAddTextOverlay: () => void;
   onRemoveTextOverlay: (id: string) => void;
   onUpdateTextOverlay: (id: string, patch: Partial<TextOverlay>) => void;
+  colorGradingEnabled: boolean;
+  colorGradingLoading: boolean;
+  colorGradingProgress: string;
+  colorGradingCorrections: string[];
+  onColorGrade: () => void;
+  onRemoveColorGrading: () => void;
+  selectedElement?: SelectedElement;
 }
 
 const TEXT_COLORS = ["#FFFFFF", "#000000", "#FACC15", "#22C55E", "#3B82F6", "#EF4444", "#A855F7"];
@@ -95,6 +96,13 @@ export default function PropertiesPanel({
   onAddTextOverlay,
   onRemoveTextOverlay,
   onUpdateTextOverlay,
+  colorGradingEnabled,
+  colorGradingLoading,
+  colorGradingProgress,
+  colorGradingCorrections,
+  onColorGrade,
+  onRemoveColorGrading,
+  selectedElement,
 }: PropertiesPanelProps) {
   const { status } = useSession();
   const isAuthenticated = status === "authenticated";
@@ -149,7 +157,7 @@ export default function PropertiesPanel({
           <TemplatePicker onSelect={onTemplateSelect} />
         </Section>
 
-        <Section title="Caption Style" defaultOpen={false}>
+        <Section title="Caption Style" defaultOpen={false} forceOpen={selectedElement?.type === "caption"}>
           <CaptionStyleEditor
             style={captionStyle}
             onChange={onCaptionStyleChange}
@@ -161,9 +169,62 @@ export default function PropertiesPanel({
           <LayoutSelector layout={layout} onLayoutChange={onLayoutChange} />
         </Section>
 
+        <Section title="Color Grading" defaultOpen={colorGradingEnabled || colorGradingLoading}>
+          {colorGradingLoading ? (
+            <div className="flex items-center gap-2 py-3">
+              <Loader2 className="h-4 w-4 animate-spin text-primary shrink-0" />
+              <span className="text-xs text-muted-foreground">{colorGradingProgress || "Processing..."}</span>
+            </div>
+          ) : colorGradingEnabled ? (
+            <div className="space-y-2">
+              <div className="flex items-center gap-2 text-xs text-green-500">
+                <Palette className="h-3.5 w-3.5" />
+                Color grading applied
+              </div>
+              {colorGradingCorrections.length > 0 && (
+                <ul className="text-[10px] text-muted-foreground space-y-0.5 pl-5 list-disc">
+                  {colorGradingCorrections.map((c, i) => (
+                    <li key={i}>{c}</li>
+                  ))}
+                </ul>
+              )}
+              <Button
+                variant="outline"
+                size="sm"
+                className="w-full h-7 text-xs"
+                onClick={onRemoveColorGrading}
+              >
+                <X className="h-3 w-3" />
+                Remove grading
+              </Button>
+            </div>
+          ) : isAuthenticated ? (
+            <Button
+              size="sm"
+              variant="outline"
+              className="w-full h-8 text-xs"
+              onClick={onColorGrade}
+            >
+              <Palette className="h-3.5 w-3.5" />
+              Auto Color Grade
+            </Button>
+          ) : (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => signIn("google")}
+              className="w-full h-8 text-xs"
+            >
+              <Lock className="h-3 w-3" />
+              Sign in to color grade
+            </Button>
+          )}
+        </Section>
+
         <Section
           title="Text Overlays"
           defaultOpen={textOverlays.length > 0}
+          forceOpen={selectedElement?.type === "overlay"}
           action={
             <Button
               variant="ghost"
@@ -185,8 +246,12 @@ export default function PropertiesPanel({
             </button>
           ) : (
             <div className="space-y-3">
-              {textOverlays.map((overlay) => (
-                <div key={overlay.id} className="space-y-2 p-2 rounded-lg border border-border">
+              {textOverlays.map((overlay) => {
+                const isSelected =
+                  selectedElement?.type === "overlay" &&
+                  selectedElement.overlayId === overlay.id;
+                return (
+                <div key={overlay.id} className={`space-y-2 p-2 rounded-lg border ${isSelected ? "border-blue-500 ring-1 ring-blue-500/30" : "border-border"}`}>
                   <div className="flex items-center gap-1">
                     <Input
                       value={overlay.text}
@@ -229,7 +294,8 @@ export default function PropertiesPanel({
                   </div>
                   <p className="text-[10px] text-muted-foreground">Drag on canvas to position</p>
                 </div>
-              ))}
+                );
+              })}
               <Button
                 variant="outline"
                 size="sm"

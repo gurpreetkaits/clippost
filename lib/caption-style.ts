@@ -4,9 +4,11 @@ export interface CaptionStyle {
   textColor: string;
   bgColor: string;
   bgOpacity: number;
-  position: "top" | "center" | "bottom";
+  position: "top" | "center" | "bottom" | "custom";
   bold: boolean;
   italic: boolean;
+  customX?: number; // 0-100 percentage
+  customY?: number; // 0-100 percentage
 }
 
 export const DEFAULT_CAPTION_STYLE: CaptionStyle = {

@@ -19,6 +19,7 @@ import {
   AlignVerticalDistributeStart,
   AlignVerticalDistributeCenter,
   AlignVerticalDistributeEnd,
+  Move,
 } from "lucide-react";
 
 const FONTS = [
@@ -37,6 +38,7 @@ const POSITIONS: {
   { value: "top", icon: AlignVerticalDistributeStart, label: "Top" },
   { value: "center", icon: AlignVerticalDistributeCenter, label: "Center" },
   { value: "bottom", icon: AlignVerticalDistributeEnd, label: "Bottom" },
+  { value: "custom", icon: Move, label: "Custom" },
 ];
 
 const TEXT_PRESETS = [
@@ -189,7 +191,15 @@ export default function CaptionStyleEditor({
                 size="sm"
                 variant={style.position === value ? "default" : "outline"}
                 className="flex-1 gap-1.5"
-                onClick={() => update({ position: value })}
+                onClick={() => {
+                  if (value === "custom") {
+                    // Only switch to custom — actual coordinates come from dragging
+                    update({ position: "custom" });
+                  } else {
+                    // Reset to preset, clear custom coordinates
+                    update({ position: value, customX: undefined, customY: undefined });
+                  }
+                }}
                 title={label}
               >
                 <Icon className="h-4 w-4" />
@@ -197,6 +207,11 @@ export default function CaptionStyleEditor({
               </Button>
             ))}
           </div>
+          {style.position === "custom" && style.customX != null && style.customY != null && (
+            <p className="text-[10px] text-muted-foreground mt-1">
+              Position: {Math.round(style.customX)}%, {Math.round(style.customY)}% — drag on canvas to reposition
+            </p>
+          )}
         </div>
 
         {/* Text Color */}

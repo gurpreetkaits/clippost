@@ -5,6 +5,8 @@ import fs from "fs";
 import { CaptionStyle, DEFAULT_CAPTION_STYLE } from "./caption-style";
 import { VideoLayout, getFrameConfig, REEL_WIDTH, REEL_HEIGHT } from "./video-layout";
 import { ReelTemplate, ZONE_ALIGNMENT_MAP } from "./caption-template";
+import { ColorGradingParams, buildColorGradingFilter } from "./color-grading";
+import { ENHANCE_FILTER } from "./enhance";
 
 export type { CaptionStyle };
 export { DEFAULT_CAPTION_STYLE };
@@ -106,8 +108,8 @@ function generateAssContent(
   const outlineColour = hexToAss(s.bgColor, s.bgOpacity);
   const boldVal = s.bold ? 1 : 0;
   const italicVal = s.italic ? 1 : 0;
-  const alignmentMap = { top: 8, center: 5, bottom: 2 };
-  const alignment = alignmentMap[s.position];
+  const alignmentMap: Record<string, number> = { top: 8, center: 5, bottom: 2, custom: 2 };
+  const alignment = alignmentMap[s.position] ?? 2;
 
   const lines: string[] = [
     "[Script Info]",
@@ -376,7 +378,9 @@ export async function createClipWithCaptions(
   style?: CaptionStyle,
   layout?: VideoLayout,
   template?: ReelTemplate,
-  textOverlays?: TextOverlay[]
+  textOverlays?: TextOverlay[],
+  colorGrading?: ColorGradingParams,
+  enhance?: boolean
 ): Promise<string> {
   const userDir = getUserTmpDir(userId);
   const outputFilename = `clip_${Date.now()}_${Math.random().toString(36).slice(2)}.mp4`;
@@ -409,6 +413,9 @@ export async function createClipWithCaptions(
 
   try {
     let ffmpegArgs: string[];
+    const enhancePrefix = enhance ? `${ENHANCE_FILTER},` : "";
+    const colorFilter = colorGrading ? buildColorGradingFilter(colorGrading) : "";
+    const colorPrefix = enhancePrefix + (colorFilter ? `${colorFilter},` : "");
 
     if (is916 && frameConfig && frameConfig.id === "fill") {
       // 9:16 Fill: crop center to 9:16 ratio, then scale to 1080x1920
@@ -431,7 +438,7 @@ export async function createClipWithCaptions(
         "-ss", start.toString(),
         "-i", videoPath,
         "-t", duration.toString(),
-        "-vf", `${cropFilter}scale=${REEL_WIDTH}:${REEL_HEIGHT},ass=${escapedAssPath}${dtSuffix}`,
+        "-vf", `${cropFilter}scale=${REEL_WIDTH}:${REEL_HEIGHT},${colorPrefix}ass=${escapedAssPath}${dtSuffix}`,
         "-c:v", "libx264",
         "-preset", "fast",
         "-crf", "23",
@@ -447,9 +454,9 @@ export async function createClipWithCaptions(
 
       let videoChain: string;
       if (radiusPx > 0) {
-        videoChain = `[0:v]ass=${escapedAssPath},scale=${scaledW}:-2,format=yuva420p,${buildRoundedCornersGeq(radiusPx)}[vid]`;
+        videoChain = `[0:v]${colorPrefix}ass=${escapedAssPath},scale=${scaledW}:-2,format=yuva420p,${buildRoundedCornersGeq(radiusPx)}[vid]`;
       } else {
-        videoChain = `[0:v]ass=${escapedAssPath},scale=${scaledW}:-2[vid]`;
+        videoChain = `[0:v]${colorPrefix}ass=${escapedAssPath},scale=${scaledW}:-2[vid]`;
       }
 
       const dt = buildDrawtextChain(textOverlays || [], REEL_WIDTH, REEL_HEIGHT);
@@ -487,7 +494,7 @@ export async function createClipWithCaptions(
         "-ss", start.toString(),
         "-i", videoPath,
         "-t", duration.toString(),
-        "-vf", `scale=trunc(iw/2)*2:trunc(ih/2)*2,ass=${escapedAssPath}${dtSuffix}`,
+        "-vf", `scale=trunc(iw/2)*2:trunc(ih/2)*2,${colorPrefix}ass=${escapedAssPath}${dtSuffix}`,
         "-c:v", "libx264",
         "-preset", "fast",
         "-crf", "23",

@@ -17,7 +17,6 @@ interface EditorHeaderProps {
   captions: { text: string }[];
   onGenerate: () => void;
   onExport: () => void;
-  transcribing: boolean;
 }
 
 export default function EditorHeader({
@@ -30,7 +29,6 @@ export default function EditorHeader({
   captions,
   onGenerate,
   onExport,
-  transcribing,
 }: EditorHeaderProps) {
   const { status } = useSession();
   const isAuthenticated = status === "authenticated";
@@ -59,14 +57,14 @@ export default function EditorHeader({
       </h1>
 
       {/* Status badges */}
-      {(generating || transcribing) && (
+      {generating && (
         <Badge variant="secondary" className="gap-1 text-xs shrink-0 hidden sm:flex">
           <Loader2 className="h-3 w-3 animate-spin" />
-          {generating ? "Generating..." : "Transcribing..."}
+          Generating...
         </Badge>
       )}
 
-      {/* Action buttons - all same height h-9 */}
+      {/* Action buttons */}
       <div className="flex items-center gap-1.5 shrink-0">
         {isAuthenticated ? (
           <Button

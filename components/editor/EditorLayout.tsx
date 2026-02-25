@@ -1,12 +1,11 @@
 "use client";
 
 import { ReactNode, useState } from "react";
-import { PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen } from "lucide-react";
+import { PanelRightClose, PanelRightOpen } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 interface EditorLayoutProps {
   header: ReactNode;
-  leftPanel?: ReactNode;
   preview: ReactNode;
   rightPanel?: ReactNode;
   bottomBar?: ReactNode;
@@ -14,29 +13,16 @@ interface EditorLayoutProps {
 
 export default function EditorLayout({
   header,
-  leftPanel,
   preview,
   rightPanel,
   bottomBar,
 }: EditorLayoutProps) {
-  const [leftOpen, setLeftOpen] = useState(true);
   const [rightOpen, setRightOpen] = useState(true);
 
   return (
     <div className="h-screen flex flex-col bg-neutral-950 overflow-hidden">
       {/* Top bar */}
       <div className="shrink-0 bg-background border-b border-border px-3 py-1.5 flex items-center gap-1">
-        {/* Left panel toggle */}
-        {leftPanel && (
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-8 w-8 shrink-0 text-muted-foreground hidden lg:flex"
-            onClick={() => setLeftOpen(!leftOpen)}
-          >
-            {leftOpen ? <PanelLeftClose className="h-4 w-4" /> : <PanelLeftOpen className="h-4 w-4" />}
-          </Button>
-        )}
         <div className="flex-1 min-w-0">{header}</div>
         {/* Right panel toggle */}
         {rightPanel && (
@@ -51,18 +37,10 @@ export default function EditorLayout({
         )}
       </div>
 
-      {/* Main area - desktop: horizontal panels, mobile: vertical scroll */}
+      {/* Main area */}
       <div className="flex-1 flex overflow-hidden min-h-0">
-        {/* Left panel */}
-        {leftPanel && leftOpen && (
-          <div className="hidden lg:flex w-[220px] shrink-0 border-r border-border bg-background flex-col overflow-y-auto p-3">
-            {leftPanel}
-          </div>
-        )}
-
         {/* Center - canvas/preview area */}
         <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
-          {/* Video canvas - fills available space */}
           <div className="flex-1 flex items-center justify-center min-h-0 overflow-hidden">
             {preview}
           </div>
@@ -70,7 +48,7 @@ export default function EditorLayout({
 
         {/* Right panel */}
         {rightPanel && rightOpen && (
-          <div className="hidden lg:flex w-[300px] shrink-0 border-l border-border bg-background flex-col overflow-y-auto">
+          <div className="hidden lg:flex w-[220px] shrink-0 border-l border-border bg-background flex-col overflow-y-auto">
             {rightPanel}
           </div>
         )}

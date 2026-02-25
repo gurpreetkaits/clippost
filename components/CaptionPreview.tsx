@@ -2,12 +2,7 @@
 
 import { useRef, useEffect, useState } from "react";
 import { CaptionStyle } from "@/lib/caption-style";
-
-interface CaptionSegment {
-  start: number;
-  end: number;
-  text: string;
-}
+import type { CaptionSegment } from "@/lib/types/editor";
 
 interface CaptionPreviewProps {
   captions: CaptionSegment[];
@@ -15,10 +10,11 @@ interface CaptionPreviewProps {
   style?: CaptionStyle;
 }
 
-const POSITION_MAP = {
+const POSITION_MAP: Record<string, string> = {
   top: "top-[6%]",
   center: "top-1/2 -translate-y-1/2",
   bottom: "bottom-[6%]",
+  custom: "bottom-[6%]", // fallback for custom position (handled by SelectableElement in preview)
 };
 
 export default function CaptionPreview({
