@@ -42,7 +42,7 @@ interface VideoPreviewPanelProps {
 const POSITION_MAP: Record<string, { x: number; y: number }> = {
   top: { x: 50, y: 6 },
   center: { x: 50, y: 50 },
-  bottom: { x: 50, y: 88 },
+  bottom: { x: 50, y: 78 },
 };
 
 function getCaptionPosition(style: CaptionStyle): { x: number; y: number } {

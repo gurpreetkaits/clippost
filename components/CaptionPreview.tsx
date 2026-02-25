@@ -13,8 +13,8 @@ interface CaptionPreviewProps {
 const POSITION_MAP: Record<string, string> = {
   top: "top-[6%]",
   center: "top-1/2 -translate-y-1/2",
-  bottom: "bottom-[6%]",
-  custom: "bottom-[6%]", // fallback for custom position (handled by SelectableElement in preview)
+  bottom: "bottom-[22%]",
+  custom: "bottom-[22%]",
 };
 
 export default function CaptionPreview({

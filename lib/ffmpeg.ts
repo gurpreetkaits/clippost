@@ -100,7 +100,8 @@ function generateAssContent(
 
   const fontSize = Math.round(s.fontSize * (height / 1080));
   const boxPad = Math.round(fontSize * 0.5);
-  const marginV = Math.round(height * 0.06);
+  // 22% from bottom keeps captions above Instagram's follow/like UI
+  const marginV = Math.round(height * 0.22);
   const marginLR = Math.round(width * 0.05);
 
   const primaryColour = hexToAss(s.textColor, 100);
@@ -201,7 +202,9 @@ function generateAssContentFromTemplate(
   // Margins: use maxWidth to calculate left/right margins
   const marginPct = (100 - t.maxWidth) / 2;
   const marginLR = Math.round((width * marginPct) / 100);
-  const marginV = Math.round(height * 0.06);
+  // Higher margin keeps captions above Instagram's UI overlay
+  const isBottomZone = t.zone.startsWith("bottom");
+  const marginV = Math.round(height * (isBottomZone ? 0.22 : 0.06));
 
   const lines: string[] = [
     "[Script Info]",
