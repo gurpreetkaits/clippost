@@ -8,8 +8,45 @@ const execFileAsync = promisify(execFile);
 
 const SARVAM_API_URL = "https://api.sarvam.ai/speech-to-text";
 const MAX_CHUNK_SECS = 25; // Sarvam max is 30s, use 25 for safety
-const MAX_DURATION = 3;
-const MAX_WORDS = 5;
+/**
+ * Maps simple language codes (en, hi, etc.) to Sarvam AI format (en-IN, hi-IN, etc.)
+ */
+function mapToSarvamLanguageCode(languageCode: string): string {
+  const mapping: Record<string, string> = {
+    en: "en-IN",
+    hi: "hi-IN",
+    bn: "bn-IN",
+    kn: "kn-IN",
+    ml: "ml-IN",
+    mr: "mr-IN",
+    od: "od-IN",
+    or: "od-IN", // Odia alternative code
+    pa: "pa-IN",
+    ta: "ta-IN",
+    te: "te-IN",
+    gu: "gu-IN",
+    as: "as-IN",
+    ur: "ur-IN",
+    ne: "ne-IN",
+    kok: "kok-IN",
+    ks: "ks-IN",
+    sd: "sd-IN",
+    sa: "sa-IN",
+    sat: "sat-IN",
+    mni: "mni-IN",
+    brx: "brx-IN",
+    mai: "mai-IN",
+    doi: "doi-IN",
+  };
+
+  // If already in Sarvam format, return as-is
+  if (languageCode.endsWith("-IN")) {
+    return languageCode;
+  }
+
+  // Map simple code to Sarvam format
+  return mapping[languageCode.toLowerCase()] || "en-IN"; // Default to en-IN
+}
 
 interface SarvamResponse {
   transcript: string;
@@ -21,16 +58,26 @@ interface SarvamResponse {
   language_code: string;
 }
 
-function groupWordsIntoSegments(words: CaptionWord[]): CaptionSegment[] {
+/**
+ * Group words into sentence-level segments based on punctuation and natural pauses.
+ * Sentences end at: period/question/exclamation marks, or pauses > 0.7s between words.
+ */
+function groupWordsIntoSentences(words: CaptionWord[]): CaptionSegment[] {
+  if (words.length === 0) return [];
+
   const segments: CaptionSegment[] = [];
   let chunk: CaptionWord[] = [];
 
-  for (const word of words) {
-    const chunkStart = chunk.length > 0 ? chunk[0].start : word.start;
-    const wouldExceedDuration = word.end - chunkStart > MAX_DURATION;
-    const wouldExceedWords = chunk.length >= MAX_WORDS;
+  for (let i = 0; i < words.length; i++) {
+    const word = words[i];
+    chunk.push(word);
 
-    if (chunk.length > 0 && (wouldExceedDuration || wouldExceedWords)) {
+    const isSentenceEnd = /[.?!]$/.test(word.word);
+    const hasLongPause =
+      i < words.length - 1 && words[i + 1].start - word.end > 0.7;
+    const isLastWord = i === words.length - 1;
+
+    if (isSentenceEnd || hasLongPause || isLastWord) {
       segments.push({
         start: chunk[0].start,
         end: chunk[chunk.length - 1].end,
@@ -39,17 +86,6 @@ function groupWordsIntoSegments(words: CaptionWord[]): CaptionSegment[] {
       });
       chunk = [];
     }
-
-    chunk.push(word);
-  }
-
-  if (chunk.length > 0) {
-    segments.push({
-      start: chunk[0].start,
-      end: chunk[chunk.length - 1].end,
-      text: chunk.map((w) => w.word).join(" "),
-      words: [...chunk],
-    });
   }
 
   return segments;
@@ -75,7 +111,7 @@ function splitTranscriptIntoSegments(
     end: parseFloat(((i + 1) * wordDuration).toFixed(2)),
   }));
 
-  return groupWordsIntoSegments(words);
+  return groupWordsIntoSentences(words);
 }
 
 async function getAudioDuration(audioPath: string): Promise<number> {
@@ -96,6 +132,9 @@ async function transcribeChunk(
   const apiKey = process.env.SERVAM_AI;
   if (!apiKey) throw new Error("SERVAM_AI API key not configured");
 
+  // Map to Sarvam's expected format (e.g., "en" -> "en-IN")
+  const sarvamLanguageCode = mapToSarvamLanguageCode(languageCode);
+
   const audioBuffer = fs.readFileSync(audioPath);
   const file = new File([audioBuffer], path.basename(audioPath), { type: "audio/mpeg" });
 
@@ -103,7 +142,7 @@ async function transcribeChunk(
   formData.append("file", file);
   formData.append("model", "saaras:v3");
   formData.append("mode", "transcribe");
-  formData.append("language_code", languageCode);
+  formData.append("language_code", sarvamLanguageCode);
   formData.append("with_timestamps", "true");
 
   const res = await fetch(SARVAM_API_URL, {
@@ -162,7 +201,7 @@ async function transcribeChunk(
     }
 
     if (words.length > 0) {
-      return groupWordsIntoSegments(words);
+      return groupWordsIntoSentences(words);
     }
   }
 

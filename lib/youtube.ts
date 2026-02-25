@@ -47,12 +47,12 @@ export async function downloadVideo(
 ): Promise<VideoMetadata> {
   const userDir = getUserTmpDir(userId);
 
-  // Get video info first (use TV client to bypass bot detection)
+  // Get video info first (avoid TV client which triggers DRM)
   const { stdout: infoJson } = await execFileAsync("yt-dlp", [
     "--dump-json",
     "--no-playlist",
     "--extractor-args",
-    "youtube:player_client=mweb,tv,web",
+    "youtube:player_client=mweb,web;player_skip=configs,webpage",
     ...getCookiesArgs(),
     url,
   ]);
@@ -75,7 +75,7 @@ export async function downloadVideo(
         filepath,
         "--no-playlist",
         "--extractor-args",
-        "youtube:player_client=mweb,tv,web",
+        "youtube:player_client=mweb,web;player_skip=configs,webpage",
         ...getCookiesArgs(),
         url,
       ],

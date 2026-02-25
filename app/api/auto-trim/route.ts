@@ -2,11 +2,11 @@ import { NextRequest } from "next/server";
 import { requireAuth } from "@/lib/auth";
 import { downloadVideo, getVideoPath } from "@/lib/youtube";
 import { isValidYouTubeUrl } from "@/lib/youtube";
-import { extractFullAudio, createClipWithCaptions, createClipNoCaptions, cleanup } from "@/lib/ffmpeg";
-import { transcribeFullAudio } from "@/lib/whisper";
+import { extractFullAudio, createClipWithCaptions, createClipNoCaptions, cleanup, CaptionSegment } from "@/lib/ffmpeg";
 import { transcribeFullAudioSarvam } from "@/lib/sarvam";
 import { splitLongSegments } from "@/lib/whisper";
 import { findBestSegment, filterCaptionsForRange } from "@/lib/ai";
+import { getCachedTranscription, cacheTranscription } from "@/lib/transcription-cache";
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { checkUsageLimit } from "@/lib/usage";
@@ -77,22 +77,33 @@ export async function POST(request: NextRequest) {
           },
         });
 
-        // Step 2: Extract full audio
-        progress("extracting_audio", "Extracting audio track...", 22);
-        audioPath = await extractFullAudio(userId, videoPath);
-        progress("extracting_audio", "Audio extracted", 35);
+        // Step 2: Check for cached transcription on disk
+        const transcriptionLanguage = language || "en";
+        let segments: CaptionSegment[];
+        const cached = getCachedTranscription(userId, metadata.id, transcriptionLanguage);
 
-        // Step 3: Transcribe
-        progress("transcribing", "Transcribing audio...", 37);
-        const useSarvam = language && language !== "en";
-        const transcribeProgress = (chunkPercent: number) => {
-          const scaled = 35 + Math.round((chunkPercent / 100) * 30);
-          progress("transcribing", "Transcribing audio...", scaled);
-        };
-        const segments = useSarvam
-          ? await transcribeFullAudioSarvam(audioPath, language, transcribeProgress)
-          : await transcribeFullAudio(audioPath, transcribeProgress);
-        progress("transcribing", "Transcription complete", 65);
+        if (cached) {
+          progress("transcribing", "Using cached transcription...", 37);
+          segments = cached;
+          progress("transcribing", "Transcription loaded from cache", 65);
+        } else {
+          // Need to transcribe
+          progress("extracting_audio", "Extracting audio track...", 22);
+          audioPath = await extractFullAudio(userId, videoPath);
+          progress("extracting_audio", "Audio extracted", 35);
+
+          progress("transcribing", "Transcribing audio with Sarvam AI...", 37);
+          const transcribeProgress = (chunkPercent: number) => {
+            const scaled = 35 + Math.round((chunkPercent / 100) * 30);
+            progress("transcribing", "Transcribing audio with Sarvam AI...", scaled);
+          };
+
+          segments = await transcribeFullAudioSarvam(audioPath, transcriptionLanguage, transcribeProgress);
+          progress("transcribing", "Transcription complete", 65);
+
+          // Cache transcription to disk for reuse
+          cacheTranscription(userId, metadata.id, transcriptionLanguage, segments);
+        }
 
         // Step 4: Analyze with GPT
         progress("analyzing", "Finding best segment...", 67);

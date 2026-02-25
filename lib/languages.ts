@@ -1,5 +1,5 @@
 export const LANGUAGES = [
-  { code: "en", label: "English" },
+  { code: "en-IN", label: "English" },
   { code: "hi-IN", label: "Hindi" },
   { code: "bn-IN", label: "Bengali" },
   { code: "kn-IN", label: "Kannada" },

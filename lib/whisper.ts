@@ -11,6 +11,26 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
+export class OpenAIRateLimitError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "OpenAIRateLimitError";
+  }
+}
+
+function isRateLimitError(error: unknown): boolean {
+  if (error instanceof Error) {
+    const message = error.message.toLowerCase();
+    return (
+      message.includes("rate limit") ||
+      message.includes("429") ||
+      message.includes("quota") ||
+      message.includes("too many requests")
+    );
+  }
+  return false;
+}
+
 const MAX_DURATION = 3;
 const MAX_WORDS = 5;
 
@@ -95,41 +115,50 @@ export function splitLongSegments(
 export async function transcribeAudio(
   audioPath: string
 ): Promise<CaptionSegment[]> {
-  const audioFile = fs.createReadStream(audioPath);
+  try {
+    const audioFile = fs.createReadStream(audioPath);
 
-  const response = await openai.audio.transcriptions.create({
-    file: audioFile,
-    model: "whisper-1",
-    response_format: "verbose_json",
-    timestamp_granularities: ["word"],
-  });
+    const response = await openai.audio.transcriptions.create({
+      file: audioFile,
+      model: "whisper-1",
+      response_format: "verbose_json",
+      timestamp_granularities: ["word"],
+    });
 
-  const data = response as unknown as {
-    words?: Array<{ word: string; start: number; end: number }>;
-    segments?: Array<{ start: number; end: number; text: string }>;
-  };
+    const data = response as unknown as {
+      words?: Array<{ word: string; start: number; end: number }>;
+      segments?: Array<{ start: number; end: number; text: string }>;
+    };
 
-  // Prefer word-level timestamps
-  if (data.words && data.words.length > 0) {
-    const words: CaptionWord[] = data.words.map((w) => ({
-      word: w.word.trim(),
-      start: w.start,
-      end: w.end,
-    }));
-    return groupWordsIntoSegments(words);
+    // Prefer word-level timestamps
+    if (data.words && data.words.length > 0) {
+      const words: CaptionWord[] = data.words.map((w) => ({
+        word: w.word.trim(),
+        start: w.start,
+        end: w.end,
+      }));
+      return groupWordsIntoSegments(words);
+    }
+
+    // Fallback: split long segments from segment-level data
+    if (data.segments && data.segments.length > 0) {
+      const segments = data.segments.map((seg) => ({
+        start: seg.start,
+        end: seg.end,
+        text: seg.text.trim(),
+      }));
+      return splitLongSegments(segments);
+    }
+
+    return [];
+  } catch (error) {
+    if (isRateLimitError(error)) {
+      throw new OpenAIRateLimitError(
+        error instanceof Error ? error.message : "OpenAI rate limit exceeded"
+      );
+    }
+    throw error;
   }
-
-  // Fallback: split long segments from segment-level data
-  if (data.segments && data.segments.length > 0) {
-    const segments = data.segments.map((seg) => ({
-      start: seg.start,
-      end: seg.end,
-      text: seg.text.trim(),
-    }));
-    return splitLongSegments(segments);
-  }
-
-  return [];
 }
 
 const MAX_FILE_SIZE = 25 * 1024 * 1024; // 25MB
@@ -139,87 +168,95 @@ export async function transcribeFullAudio(
   audioPath: string,
   onProgress?: (percent: number) => void
 ): Promise<CaptionSegment[]> {
-  const stat = fs.statSync(audioPath);
-
-  if (stat.size < MAX_FILE_SIZE) {
-    onProgress?.(50);
-    const segments = await transcribeAudio(audioPath);
-    onProgress?.(100);
-    return segments;
-  }
-
-  // Split into 20-minute chunks
-  const dir = path.dirname(audioPath);
-  const base = path.basename(audioPath, path.extname(audioPath));
-
-  // Get total duration
-  const { stdout: durationStr } = await execFileAsync("ffprobe", [
-    "-v",
-    "error",
-    "-show_entries",
-    "format=duration",
-    "-of",
-    "default=noprint_wrappers=1:nokey=1",
-    audioPath,
-  ]);
-  const totalDuration = parseFloat(durationStr.trim());
-  const numChunks = Math.ceil(totalDuration / CHUNK_DURATION_SECS);
-
-  const allSegments: CaptionSegment[] = [];
-  const chunkPaths: string[] = [];
-
   try {
-    for (let i = 0; i < numChunks; i++) {
-      const chunkStart = i * CHUNK_DURATION_SECS;
-      const chunkPath = path.join(dir, `${base}_chunk${i}.mp3`);
-      chunkPaths.push(chunkPath);
+    const stat = fs.statSync(audioPath);
 
-      await execFileAsync(
-        "ffmpeg",
-        [
-          "-y",
-          "-ss",
-          chunkStart.toString(),
-          "-i",
-          audioPath,
-          "-t",
-          CHUNK_DURATION_SECS.toString(),
-          "-acodec",
-          "libmp3lame",
-          "-ar",
-          "16000",
-          "-ac",
-          "1",
-          "-b:a",
-          "32k",
-          chunkPath,
-        ],
-        { timeout: 120000 }
-      );
+    if (stat.size < MAX_FILE_SIZE) {
+      onProgress?.(50);
+      const segments = await transcribeAudio(audioPath);
+      onProgress?.(100);
+      return segments;
+    }
 
-      const chunkSegments = await transcribeAudio(chunkPath);
+    // Split into 20-minute chunks
+    const dir = path.dirname(audioPath);
+    const base = path.basename(audioPath, path.extname(audioPath));
 
-      // Offset timestamps by the chunk's start time
-      for (const seg of chunkSegments) {
-        seg.start += chunkStart;
-        seg.end += chunkStart;
-        if (seg.words) {
-          for (const w of seg.words) {
-            w.start += chunkStart;
-            w.end += chunkStart;
+    // Get total duration
+    const { stdout: durationStr } = await execFileAsync("ffprobe", [
+      "-v",
+      "error",
+      "-show_entries",
+      "format=duration",
+      "-of",
+      "default=noprint_wrappers=1:nokey=1",
+      audioPath,
+    ]);
+    const totalDuration = parseFloat(durationStr.trim());
+    const numChunks = Math.ceil(totalDuration / CHUNK_DURATION_SECS);
+
+    const allSegments: CaptionSegment[] = [];
+    const chunkPaths: string[] = [];
+
+    try {
+      for (let i = 0; i < numChunks; i++) {
+        const chunkStart = i * CHUNK_DURATION_SECS;
+        const chunkPath = path.join(dir, `${base}_chunk${i}.mp3`);
+        chunkPaths.push(chunkPath);
+
+        await execFileAsync(
+          "ffmpeg",
+          [
+            "-y",
+            "-ss",
+            chunkStart.toString(),
+            "-i",
+            audioPath,
+            "-t",
+            CHUNK_DURATION_SECS.toString(),
+            "-acodec",
+            "libmp3lame",
+            "-ar",
+            "16000",
+            "-ac",
+            "1",
+            "-b:a",
+            "32k",
+            chunkPath,
+          ],
+          { timeout: 120000 }
+        );
+
+        const chunkSegments = await transcribeAudio(chunkPath);
+
+        // Offset timestamps by the chunk's start time
+        for (const seg of chunkSegments) {
+          seg.start += chunkStart;
+          seg.end += chunkStart;
+          if (seg.words) {
+            for (const w of seg.words) {
+              w.start += chunkStart;
+              w.end += chunkStart;
+            }
           }
         }
+
+        allSegments.push(...chunkSegments);
+        onProgress?.(Math.round(((i + 1) / numChunks) * 100));
       }
+    } finally {
+      // Clean up chunk files
+      for (const cp of chunkPaths) {
+        if (fs.existsSync(cp)) fs.unlinkSync(cp);
+      }
+    }
 
-      allSegments.push(...chunkSegments);
-      onProgress?.(Math.round(((i + 1) / numChunks) * 100));
+    return allSegments;
+  } catch (error) {
+    // Re-throw OpenAIRateLimitError to be handled by caller
+    if (error instanceof OpenAIRateLimitError) {
+      throw error;
     }
-  } finally {
-    // Clean up chunk files
-    for (const cp of chunkPaths) {
-      if (fs.existsSync(cp)) fs.unlinkSync(cp);
-    }
+    throw error;
   }
-
-  return allSegments;
 }

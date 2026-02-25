@@ -28,7 +28,7 @@ model User {
   useAiCaptions     Boolean @default(true)
 
   // Defaults
-  defaultLanguage String  @default("en")
+  defaultLanguage String  @default("en-IN")
   defaultFormat   String  @default("original")
   defaultFrame    String  @default("cinema")
   autonomousMode  Boolean @default(false)
@@ -88,16 +88,18 @@ model YouTubeChannel {
 }
 
 model Video {
-  id        String   @id @default(cuid())
-  userId    String
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  youtubeId String
-  title     String
-  duration  Float
-  filename  String
-  sourceUrl String
-  createdAt DateTime @default(now())
-  clips     Clip[]
+  id            String   @id @default(cuid())
+  userId        String
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  youtubeId     String
+  title         String
+  duration      Float
+  filename      String
+  sourceUrl     String
+  transcription Json?    // Stores CaptionSegment[] with timestamps
+  language      String?  // Language used for transcription
+  createdAt     DateTime @default(now())
+  clips         Clip[]
 
   @@unique([userId, youtubeId])
   @@map("videos")

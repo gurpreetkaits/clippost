@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { extractAudio, cleanup } from "@/lib/ffmpeg";
-import { transcribeAudio } from "@/lib/whisper";
 import { transcribeAudioSarvam } from "@/lib/sarvam";
+import { splitLongSegments } from "@/lib/whisper";
 import { getVideoPath } from "@/lib/youtube";
 import { requireAuth } from "@/lib/auth";
 
@@ -32,10 +32,9 @@ export async function POST(request: NextRequest) {
     const videoPath = getVideoPath(userId, filename);
     audioPath = await extractAudio(userId, videoPath, start, end);
 
-    const useSarvam = language && language !== "en";
-    const segments = useSarvam
-      ? await transcribeAudioSarvam(audioPath, language)
-      : await transcribeAudio(audioPath);
+    // Always use Sarvam AI for transcription
+    const transcriptionLanguage = language || "en";
+    const segments = await transcribeAudioSarvam(audioPath, transcriptionLanguage);
 
     // Offset timestamps relative to clip start (including word-level)
     const offsetSegments = segments.map((seg) => ({
@@ -49,7 +48,10 @@ export async function POST(request: NextRequest) {
       })),
     }));
 
-    return NextResponse.json({ segments: offsetSegments });
+    // Split sentence-level segments into short display segments for captions
+    const displaySegments = splitLongSegments(offsetSegments);
+
+    return NextResponse.json({ segments: displaySegments });
   } catch (error) {
     console.error("Transcription error:", error);
     return NextResponse.json(

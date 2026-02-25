@@ -2,10 +2,11 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireAuth, authenticateApiKey } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { isValidYouTubeUrl, downloadVideo, getVideoPath } from "@/lib/youtube";
-import { extractFullAudio, createClipWithCaptions, cleanup } from "@/lib/ffmpeg";
-import { transcribeFullAudio, splitLongSegments } from "@/lib/whisper";
+import { extractFullAudio, createClipWithCaptions, cleanup, CaptionSegment } from "@/lib/ffmpeg";
+import { splitLongSegments } from "@/lib/whisper";
 import { transcribeFullAudioSarvam } from "@/lib/sarvam";
-import { findBestSegment, filterCaptionsForRange, generateCaption } from "@/lib/ai";
+import { findBestSegment, filterCaptionsForRange, generateCaption, OpenAIRateLimitError as AIRateLimitError } from "@/lib/ai";
+import { getCachedTranscription, cacheTranscription } from "@/lib/transcription-cache";
 import { checkUsageLimit } from "@/lib/usage";
 import { getDefaultAccount, refreshTokenIfNeeded } from "@/lib/accounts";
 import {
@@ -39,16 +40,16 @@ function sseEvent(data: Record<string, unknown>): string {
 }
 
 export async function POST(request: NextRequest) {
-  // Try session auth first, then API key auth
+  // Try API key auth first, then session auth
   let userId: string;
-  const authResult = await requireAuth();
-  if (authResult instanceof NextResponse) {
-    const apiKeyAuth = await authenticateApiKey(request);
-    if (!apiKeyAuth) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
+  const apiKeyAuth = await authenticateApiKey(request);
+  if (apiKeyAuth) {
     userId = apiKeyAuth.userId;
   } else {
+    const authResult = await requireAuth();
+    if (authResult instanceof NextResponse) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
     userId = authResult.userId;
   }
 
@@ -65,13 +66,14 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Invalid YouTube URL" }, { status: 400 });
   }
 
-  const usageCheck = await checkUsageLimit(userId, "CLIP_CREATED");
-  if (!usageCheck.allowed) {
-    return NextResponse.json(
-      { error: `Clip limit reached (${usageCheck.used}/${usageCheck.limit} this month).` },
-      { status: 403 }
-    );
-  }
+  // Usage check disabled for local development
+  // const usageCheck = await checkUsageLimit(userId, "CLIP_CREATED");
+  // if (!usageCheck.allowed) {
+  //   return NextResponse.json(
+  //     { error: `Clip limit reached (${usageCheck.used}/${usageCheck.limit} this month).` },
+  //     { status: 403 }
+  //   );
+  // }
 
   const encoder = new TextEncoder();
   const stream = new ReadableStream({
@@ -126,30 +128,95 @@ export async function POST(request: NextRequest) {
           },
         });
 
-        // Step 2: Extract audio
-        progress("extracting_audio", "Extracting audio track...", 17);
-        audioPath = await extractFullAudio(userId, videoPath);
-        progress("extracting_audio", "Audio extracted", 25);
+        // Step 2: Check for cached transcription on disk
+        let segments: CaptionSegment[];
+        const cached = getCachedTranscription(userId, metadata.id, language);
 
-        // Step 3: Transcribe
-        progress("transcribing", "Transcribing audio...", 27);
-        const useSarvam = language !== "en";
-        const transcribeProgress = (chunkPercent: number) => {
-          const scaled = 25 + Math.round((chunkPercent / 100) * 25);
-          progress("transcribing", "Transcribing audio...", scaled);
-        };
-        const segments = useSarvam
-          ? await transcribeFullAudioSarvam(audioPath, language, transcribeProgress)
-          : await transcribeFullAudio(audioPath, transcribeProgress);
-        progress("transcribing", "Transcription complete", 50);
+        if (cached) {
+          progress("transcribing", "Using cached transcription...", 27);
+          segments = cached;
+          progress("transcribing", "Transcription loaded from cache", 50);
+        } else {
+          // Need to transcribe
+          progress("extracting_audio", "Extracting audio track...", 17);
+          audioPath = await extractFullAudio(userId, videoPath);
+          progress("extracting_audio", "Audio extracted", 25);
 
-        // Step 4: AI picks best segment
+          progress("transcribing", "Transcribing audio with Sarvam AI...", 27);
+          const transcribeProgress = (chunkPercent: number) => {
+            const scaled = 25 + Math.round((chunkPercent / 100) * 25);
+            progress("transcribing", "Transcribing audio with Sarvam AI...", scaled);
+          };
+
+          segments = await transcribeFullAudioSarvam(audioPath, language, transcribeProgress);
+          progress("transcribing", "Transcription complete", 50);
+
+          // Cache transcription to disk for reuse
+          cacheTranscription(userId, metadata.id, language, segments);
+        }
+
+        // Step 4: AI picks best segment with fallback to simple heuristic
         progress("analyzing", "Finding best segment...", 52);
-        const bestSegment = await findBestSegment(
-          segments,
-          purpose || undefined,
-          metadata.duration
-        );
+        let bestSegment;
+        let usedAIFallback = false;
+
+        try {
+          bestSegment = await findBestSegment(
+            segments,
+            purpose || undefined,
+            metadata.duration
+          );
+        } catch (error) {
+          if (error instanceof AIRateLimitError) {
+            // OpenAI rate limit for AI selection - use simple heuristic
+            console.log("OpenAI rate limit for AI selection, using heuristic fallback");
+            progress("analyzing", "OpenAI limit reached, using heuristic selection...", 55);
+            usedAIFallback = true;
+
+            // Simple heuristic: find longest continuous speech block (15-60s)
+            const speechBlocks: Array<{ start: number; end: number; duration: number }> = [];
+            let currentBlock = { start: segments[0]?.start || 0, end: segments[0]?.end || 0 };
+
+            for (let i = 1; i < segments.length; i++) {
+              const gap = segments[i].start - currentBlock.end;
+              if (gap <= 2) {
+                currentBlock.end = segments[i].end;
+              } else {
+                const duration = currentBlock.end - currentBlock.start;
+                if (duration >= 15 && duration <= 60) {
+                  speechBlocks.push({ ...currentBlock, duration });
+                }
+                currentBlock = { start: segments[i].start, end: segments[i].end };
+              }
+            }
+
+            // Add last block
+            const lastDuration = currentBlock.end - currentBlock.start;
+            if (lastDuration >= 15 && lastDuration <= 60) {
+              speechBlocks.push({ ...currentBlock, duration: lastDuration });
+            }
+
+            // Pick the longest block, or first 30s if no good block found
+            if (speechBlocks.length > 0) {
+              const longest = speechBlocks.reduce((a, b) => a.duration > b.duration ? a : b);
+              bestSegment = {
+                start: longest.start,
+                end: longest.end,
+                reason: "Selected using heuristic fallback (longest continuous speech)",
+              };
+            } else {
+              // Fallback: use first 30 seconds
+              bestSegment = {
+                start: 0,
+                end: Math.min(30, metadata.duration),
+                reason: "Selected using heuristic fallback (first 30 seconds)",
+              };
+            }
+          } else {
+            throw error;
+          }
+        }
+
         progress("analyzing", `Found: ${bestSegment.reason}`, 60);
 
         // Step 5: Generate clip with captions + user layout
@@ -205,7 +272,9 @@ export async function POST(request: NextRequest) {
         if (user?.autoPostInstagram) {
           progress("publishing_instagram", "Publishing to Instagram...", 77);
           try {
+            console.log('[DEBUG] Getting Instagram account for userId:', userId);
             const igAccount = await getDefaultAccount(userId);
+            console.log('[DEBUG] Instagram account found:', igAccount ? igAccount.username : 'null');
             if (igAccount) {
               const refreshed = await refreshTokenIfNeeded(userId, igAccount);
               const credentials = {
