@@ -41,6 +41,7 @@ model User {
   youtubeChannels    YouTubeChannel[]
   videos             Video[]
   clips              Clip[]
+  projects           Project[]
   usageRecords       UsageRecord[]
   billingEvents      BillingEvent[]
   captionTemplates   CaptionTemplate[]
@@ -51,6 +52,17 @@ model User {
 enum Plan {
   FREE
   PRO
+}
+
+enum VideoSource {
+  YOUTUBE
+  UPLOAD
+}
+
+enum ProjectStatus {
+  DRAFT
+  RENDERING
+  COMPLETE
 }
 
 model InstagramAccount {
@@ -90,18 +102,20 @@ model YouTubeChannel {
 }
 
 model Video {
-  id            String   @id @default(cuid())
+  id            String      @id @default(cuid())
   userId        String
-  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  youtubeId     String
+  user          User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  youtubeId     String?
   title         String
   duration      Float
   filename      String
-  sourceUrl     String
-  transcription Json?    // Stores CaptionSegment[] with timestamps
-  language      String?  // Language used for transcription
-  createdAt     DateTime @default(now())
+  sourceUrl     String?
+  source        VideoSource @default(YOUTUBE)
+  transcription Json?       // Stores CaptionSegment[] with timestamps
+  language      String?     // Language used for transcription
+  createdAt     DateTime    @default(now())
   clips         Clip[]
+  projects      Project[]
 
   @@unique([userId, youtubeId])
   @@map("videos")
@@ -181,4 +195,26 @@ model BillingEvent {
 
   @@index([userId, createdAt])
   @@map("billing_events")
+}
+
+model Project {
+  id            String        @id @default(cuid())
+  userId        String
+  user          User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  videoId       String?
+  video         Video?        @relation(fields: [videoId], references: [id], onDelete: SetNull)
+  title         String        @default("Untitled Project")
+  segments      Json?         // ProjectSegment[]
+  captionStyle  Json?         // CaptionStyle
+  layout        Json?         // VideoLayout
+  textOverlays  Json?         // TextOverlay[]
+  audioTracks   Json?         // AudioTrack[]
+  filters       Json?         // FilterConfig
+  status        ProjectStatus @default(DRAFT)
+  outputFilename String?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  @@index([userId, updatedAt])
+  @@map("projects")
 }

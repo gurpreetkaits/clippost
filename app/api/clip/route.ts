@@ -82,10 +82,16 @@ export async function POST(request: NextRequest) {
       template
     );
 
-    // Find the video record if it exists
+    // Find the video record if it exists (by youtubeId or filename)
     const youtubeId = filename.replace(/\.mp4$/, "");
     const video = await prisma.video.findFirst({
-      where: { userId, youtubeId },
+      where: {
+        userId,
+        OR: [
+          { youtubeId },
+          { filename },
+        ],
+      },
     });
 
     await prisma.clip.create({
