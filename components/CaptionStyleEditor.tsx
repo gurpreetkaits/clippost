@@ -64,6 +64,7 @@ const BG_PRESETS = [
 interface CaptionStyleEditorProps {
   style: CaptionStyle;
   onChange: (style: CaptionStyle) => void;
+  compact?: boolean;
 }
 
 function ColorPicker({
@@ -113,16 +114,13 @@ function ColorPicker({
 export default function CaptionStyleEditor({
   style,
   onChange,
+  compact,
 }: CaptionStyleEditorProps) {
   const update = (patch: Partial<CaptionStyle>) =>
     onChange({ ...style, ...patch });
 
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-sm">Caption Style</CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-4">
+  const content = (
+    <div className="space-y-4">
         {/* Font */}
         <div className="space-y-1.5">
           <Label className="text-xs">Font</Label>
@@ -237,7 +235,17 @@ export default function CaptionStyleEditor({
             step={1}
           />
         </div>
-      </CardContent>
+    </div>
+  );
+
+  if (compact) return content;
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-sm">Caption Style</CardTitle>
+      </CardHeader>
+      <CardContent>{content}</CardContent>
     </Card>
   );
 }

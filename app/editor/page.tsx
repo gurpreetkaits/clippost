@@ -4,13 +4,17 @@ import { useState, useCallback, useEffect, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useSession } from "next-auth/react";
 import EditorLayout from "@/components/editor/EditorLayout";
+import EditorHeader from "@/components/editor/EditorHeader";
 import VideoPreviewPanel from "@/components/editor/VideoPreviewPanel";
-import ControlPanel from "@/components/editor/ControlPanel";
-import CaptionTimeline from "@/components/CaptionTimeline";
-import { Badge } from "@/components/ui/badge";
+import PropertiesPanel from "@/components/editor/PropertiesPanel";
+import BottomToolbar from "@/components/editor/BottomToolbar";
+import ClipBrowserSidebar, {
+  type SidebarClip,
+} from "@/components/editor/ClipBrowserSidebar";
 import { Button } from "@/components/ui/button";
-import { Loader2, ArrowLeft, Film, Sparkles } from "lucide-react";
+import { Loader2, ArrowLeft, Film } from "lucide-react";
 import { CaptionStyle, DEFAULT_CAPTION_STYLE } from "@/lib/caption-style";
+import { VideoLayout, DEFAULT_LAYOUT } from "@/lib/video-layout";
 import { templateToCaptionStyle } from "@/lib/caption-template";
 import type { ReelTemplate } from "@/lib/caption-template";
 import { useUndo } from "@/lib/hooks/use-undo";
@@ -26,6 +30,15 @@ interface VideoData {
   filename: string;
   title: string;
   duration: number;
+}
+
+interface TextOverlay {
+  id: string;
+  text: string;
+  x: number;
+  y: number;
+  fontSize: number;
+  color: string;
 }
 
 interface LegacyEditorData {
@@ -47,7 +60,6 @@ function EditorContent() {
 
   const [videoData, setVideoData] = useState<VideoData | null>(null);
   const [loaded, setLoaded] = useState(false);
-  const [segmentReason, setSegmentReason] = useState("");
 
   // Editor state
   const [start, setStart] = useState(0);
@@ -65,6 +77,15 @@ function EditorContent() {
   const [error, setError] = useState("");
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
   const [language, setLanguage] = useState("en");
+  const [layout, setLayout] = useState<VideoLayout>(DEFAULT_LAYOUT);
+
+  // Text overlays (draggable on canvas)
+  const [textOverlays, setTextOverlays] = useState<TextOverlay[]>([]);
+
+  // Clip browser state
+  const [sidebarClips, setSidebarClips] = useState<SidebarClip[]>([]);
+  const [sidebarLoading, setSidebarLoading] = useState(false);
+  const [activeClipId, setActiveClipId] = useState<string | null>(null);
 
   // Fetch user language preference
   useEffect(() => {
@@ -77,16 +98,70 @@ function EditorContent() {
       .catch(() => {});
   }, [isAuthenticated]);
 
-  // Load video data from query params or sessionStorage
+  // Fetch sibling clips for sidebar
+  const fetchSidebarClips = useCallback(
+    async (videoFilename: string) => {
+      if (!isAuthenticated) return;
+      setSidebarLoading(true);
+      try {
+        const res = await fetch(
+          `/api/clips?videoFilename=${encodeURIComponent(videoFilename)}`
+        );
+        if (res.ok) {
+          const data = await res.json();
+          setSidebarClips(data.clips || []);
+        }
+      } catch {
+        // sidebar is non-critical
+      } finally {
+        setSidebarLoading(false);
+      }
+    },
+    [isAuthenticated]
+  );
+
+  // Load video data
   useEffect(() => {
     const videoParam = searchParams.get("video");
+    const clipParam = searchParams.get("clip");
     const titleParam = searchParams.get("title");
     const durationParam = searchParams.get("duration");
     const startParam = searchParams.get("start");
     const endParam = searchParams.get("end");
 
+    if (clipParam) {
+      (async () => {
+        try {
+          const r = await fetch(`/api/clips/${clipParam}`);
+          if (!r.ok) throw new Error("Clip not found");
+          const clip = await r.json();
+
+          const video = clip.video;
+          if (video) {
+            setVideoData({
+              filename: video.filename,
+              title: video.title || "Untitled",
+              duration: video.duration || 0,
+            });
+            fetchSidebarClips(video.filename);
+          }
+
+          setStart(clip.startTime);
+          setEnd(clip.endTime);
+          setClipFilename(clip.filename);
+          setActiveClipId(clip.id);
+          if (clip.captionStyle) {
+            setCaptionStyle(clip.captionStyle as CaptionStyle);
+          }
+        } catch {
+          // show empty state
+        }
+        setLoaded(true);
+      })();
+      return;
+    }
+
     if (videoParam) {
-      // New flow: video filename in query params
       const duration = durationParam ? parseFloat(durationParam) : 0;
       setVideoData({
         filename: videoParam,
@@ -96,11 +171,11 @@ function EditorContent() {
       if (startParam) setStart(parseFloat(startParam));
       if (endParam) setEnd(parseFloat(endParam));
       else if (duration > 0) setEnd(Math.min(30, duration));
+      fetchSidebarClips(videoParam);
       setLoaded(true);
       return;
     }
 
-    // Legacy flow: sessionStorage from auto-trim
     const raw = sessionStorage.getItem("editorData");
     if (raw) {
       try {
@@ -116,7 +191,7 @@ function EditorContent() {
           captionUndo.reset(data.segments);
         }
         if (data.clipFilename) setClipFilename(data.clipFilename);
-        if (data.segmentReason) setSegmentReason(data.segmentReason);
+        fetchSidebarClips(data.videoFilename);
       } catch {}
       sessionStorage.removeItem("editorData");
     }
@@ -128,17 +203,14 @@ function EditorContent() {
     if (!videoData) return;
     setTranscribing(true);
     setError("");
-
     try {
       const response = await fetch("/api/transcribe", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ filename: videoData.filename, start, end, language }),
       });
-
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "Transcription failed");
-
       setCaptions(data.segments);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Transcription failed");
@@ -147,11 +219,10 @@ function EditorContent() {
     }
   }, [videoData, start, end, language, setCaptions]);
 
-  const handleGenerateClip = useCallback(async () => {
-    if (!videoData) return;
+  const doGenerate = useCallback(async (): Promise<string | null> => {
+    if (!videoData) return null;
     setGenerating(true);
     setError("");
-
     try {
       let finalCaptions = captions;
       if (finalCaptions.length === 0) {
@@ -176,26 +247,46 @@ function EditorContent() {
           captions: finalCaptions,
           style: captionStyle,
           templateId: activeTemplateId,
+          layout,
+          textOverlays,
         }),
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "Clip generation failed");
 
       setClipFilename(data.clipFilename);
+      fetchSidebarClips(videoData.filename);
+      return data.clipFilename;
     } catch (err) {
       setError(err instanceof Error ? err.message : "Clip generation failed");
+      return null;
     } finally {
       setGenerating(false);
     }
-  }, [videoData, start, end, captions, captionStyle, language, activeTemplateId, setCaptions]);
+  }, [videoData, start, end, captions, captionStyle, language, activeTemplateId, layout, textOverlays, setCaptions, fetchSidebarClips]);
+
+  const handleGenerateClip = useCallback(async () => {
+    await doGenerate();
+  }, [doGenerate]);
+
+  const handleExport = useCallback(async () => {
+    const filename = await doGenerate();
+    if (filename && videoData) {
+      const url = `/api/video?file=${encodeURIComponent(filename)}`;
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${videoData.title.replace(/[^a-zA-Z0-9_-]/g, "_")}_export.mp4`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+    }
+  }, [doGenerate, videoData]);
 
   const handleSegmentTimingChange = useCallback(
     (index: number, edge: "start" | "end", newTime: number) => {
       setCaptions(
         captions.map((seg, i) =>
-          i === index
-            ? { ...seg, [edge]: newTime, words: undefined }
-            : seg
+          i === index ? { ...seg, [edge]: newTime, words: undefined } : seg
         )
       );
     },
@@ -218,10 +309,77 @@ function EditorContent() {
     []
   );
 
-  // No data loaded
+  const handleTextOverlayMove = useCallback((id: string, x: number, y: number) => {
+    setTextOverlays((prev) =>
+      prev.map((o) => (o.id === id ? { ...o, x, y } : o))
+    );
+  }, []);
+
+  const handleAddTextOverlay = useCallback(() => {
+    setTextOverlays((prev) => [
+      ...prev,
+      {
+        id: `text_${Date.now()}`,
+        text: "New Text",
+        x: 30,
+        y: 40,
+        fontSize: 24,
+        color: "#FFFFFF",
+      },
+    ]);
+  }, []);
+
+  const handleRemoveTextOverlay = useCallback((id: string) => {
+    setTextOverlays((prev) => prev.filter((o) => o.id !== id));
+  }, []);
+
+  const handleUpdateTextOverlay = useCallback((id: string, patch: Partial<TextOverlay>) => {
+    setTextOverlays((prev) =>
+      prev.map((o) => (o.id === id ? { ...o, ...patch } : o))
+    );
+  }, []);
+
+  const handleSelectClip = useCallback(
+    async (clip: SidebarClip) => {
+      setActiveClipId(clip.id);
+      setStart(clip.startTime);
+      setEnd(clip.endTime);
+      setClipFilename(clip.filename);
+      setPlaying(false);
+      setError("");
+      captionUndo.reset([]);
+      try {
+        const r = await fetch(`/api/clips/${clip.id}`);
+        if (r.ok) {
+          const data = await r.json();
+          if (data.captionStyle) {
+            setCaptionStyle(data.captionStyle as CaptionStyle);
+          }
+        }
+      } catch {}
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    []
+  );
+
+  const handleNewClip = useCallback(() => {
+    setActiveClipId(null);
+    setStart(0);
+    setEnd(videoData ? Math.min(30, videoData.duration) : 30);
+    setClipFilename(null);
+    setCaptionStyle(DEFAULT_CAPTION_STYLE);
+    setActiveTemplateId(undefined);
+    setLayout(DEFAULT_LAYOUT);
+    setPlaying(false);
+    setError("");
+    setTextOverlays([]);
+    captionUndo.reset([]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [videoData]);
+
   if (loaded && !videoData) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
+      <div className="min-h-screen flex items-center justify-center bg-neutral-950">
         <div className="text-center space-y-4">
           <Film className="h-12 w-12 text-muted-foreground/40 mx-auto" />
           <p className="text-muted-foreground">No video loaded.</p>
@@ -234,10 +392,9 @@ function EditorContent() {
     );
   }
 
-  // Still loading
   if (!loaded || !videoData) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
+      <div className="min-h-screen flex items-center justify-center bg-neutral-950">
         <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
       </div>
     );
@@ -247,21 +404,32 @@ function EditorContent() {
 
   return (
     <EditorLayout
-      title={videoData.title}
-      onBack={() => router.push("/")}
-      badge={
-        segmentReason ? (
-          <Badge variant="secondary" className="hidden sm:flex gap-1 shrink-0">
-            <Sparkles className="h-3 w-3" />
-            {segmentReason.length > 60 ? segmentReason.slice(0, 60) + "..." : segmentReason}
-          </Badge>
-        ) : undefined
+      header={
+        <EditorHeader
+          onBack={() => router.push("/")}
+          videoTitle={videoData.title}
+          clipFilename={clipFilename}
+          clipDuration={end - start}
+          language={language}
+          generating={generating}
+          captions={captions}
+          onGenerate={handleGenerateClip}
+          onExport={handleExport}
+          transcribing={transcribing}
+        />
+      }
+      leftPanel={
+        <ClipBrowserSidebar
+          clips={sidebarClips}
+          loading={sidebarLoading}
+          activeClipId={activeClipId}
+          onSelectClip={handleSelectClip}
+          onNewClip={handleNewClip}
+        />
       }
       preview={
         <VideoPreviewPanel
           videoUrl={videoUrl}
-          videoFilename={videoData.filename}
-          videoTitle={videoData.title}
           start={start}
           end={end}
           playing={playing}
@@ -272,11 +440,32 @@ function EditorContent() {
           captionStyle={captionStyle}
           clipFilename={clipFilename}
           generating={generating}
-          language={language}
+          layout={layout}
+          textOverlays={textOverlays}
+          onTextOverlayMove={handleTextOverlayMove}
         />
       }
-      controls={
-        <ControlPanel
+      rightPanel={
+        <PropertiesPanel
+          captions={captions}
+          captionStyle={captionStyle}
+          onCaptionStyleChange={handleCaptionStyleChange}
+          onTemplateSelect={handleTemplateSelect}
+          layout={layout}
+          onLayoutChange={setLayout}
+          language={language}
+          onLanguageChange={setLanguage}
+          onTranscribe={handleTranscribe}
+          transcribing={transcribing}
+          clipDuration={end - start}
+          textOverlays={textOverlays}
+          onAddTextOverlay={handleAddTextOverlay}
+          onRemoveTextOverlay={handleRemoveTextOverlay}
+          onUpdateTextOverlay={handleUpdateTextOverlay}
+        />
+      }
+      bottomBar={
+        <BottomToolbar
           duration={videoData.duration}
           start={start}
           end={end}
@@ -289,31 +478,10 @@ function EditorContent() {
           onRedo={captionUndo.redo}
           canUndo={captionUndo.canUndo}
           canRedo={captionUndo.canRedo}
-          captionStyle={captionStyle}
-          onCaptionStyleChange={handleCaptionStyleChange}
-          activeTemplateId={activeTemplateId}
-          onTemplateSelect={handleTemplateSelect}
-          language={language}
-          onLanguageChange={setLanguage}
-          onTranscribe={handleTranscribe}
-          transcribing={transcribing}
-          onGenerate={handleGenerateClip}
-          generating={generating}
-          error={error}
+          selectedIndex={selectedIndex}
+          onSelectSegment={setSelectedIndex}
+          onSegmentTimingChange={handleSegmentTimingChange}
         />
-      }
-      timeline={
-        captions.length > 0 ? (
-          <CaptionTimeline
-            segments={captions}
-            clipStart={start}
-            clipEnd={end}
-            currentTime={currentTime}
-            selectedIndex={selectedIndex}
-            onSelectSegment={setSelectedIndex}
-            onSegmentTimingChange={handleSegmentTimingChange}
-          />
-        ) : undefined
       }
     />
   );
@@ -323,7 +491,7 @@ export default function EditorPage() {
   return (
     <Suspense
       fallback={
-        <div className="min-h-screen flex items-center justify-center">
+        <div className="min-h-screen flex items-center justify-center bg-neutral-950">
           <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
         </div>
       }

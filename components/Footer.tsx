@@ -1,10 +1,17 @@
+"use client";
+
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { Scissors } from "lucide-react";
 
 const FEEDBACK_URL =
   "https://x.com/intent/tweet?text=Hey%20%40gurpreetkait%20here%27s%20my%20feedback%20on%20ClipPost%3A%20";
 
 export default function Footer() {
+  const pathname = usePathname();
+
+  if (pathname.startsWith("/editor")) return null;
+
   return (
     <footer className="border-t border-border mt-auto">
       <div className="max-w-6xl mx-auto px-4 py-8">

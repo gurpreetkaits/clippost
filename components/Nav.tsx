@@ -18,7 +18,7 @@ export default function Nav() {
   const pathname = usePathname();
   const { data: session, status } = useSession();
 
-  if (pathname === "/login") return null;
+  if (pathname === "/login" || pathname.startsWith("/editor")) return null;
 
   const user = session?.user;
 

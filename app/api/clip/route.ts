@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClipWithCaptions, CaptionSegment, CaptionStyle } from "@/lib/ffmpeg";
+import { createClipWithCaptions, CaptionSegment, CaptionStyle, TextOverlay } from "@/lib/ffmpeg";
 import { VideoLayout } from "@/lib/video-layout";
 import { getVideoPath } from "@/lib/youtube";
 import { requireAuth } from "@/lib/auth";
@@ -31,6 +31,7 @@ export async function POST(request: NextRequest) {
       style,
       layout,
       templateId,
+      textOverlays,
     }: {
       filename: string;
       start: number;
@@ -39,6 +40,7 @@ export async function POST(request: NextRequest) {
       style?: CaptionStyle;
       layout?: VideoLayout;
       templateId?: string;
+      textOverlays?: TextOverlay[];
     } = await request.json();
 
     if (!filename || start === undefined || end === undefined) {
@@ -79,7 +81,8 @@ export async function POST(request: NextRequest) {
       shortCaptions,
       style,
       layout,
-      template
+      template,
+      textOverlays
     );
 
     // Find the video record if it exists (by youtubeId or filename)

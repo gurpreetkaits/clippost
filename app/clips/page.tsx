@@ -86,7 +86,7 @@ export default function ClipsPage() {
   };
 
   const handleEdit = (clip: ClipItem) => {
-    router.push(`/editor/${clip.id}`);
+    router.push(`/editor?clip=${clip.id}`);
   };
 
   return (

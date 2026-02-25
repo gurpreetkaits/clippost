@@ -1,68 +1,87 @@
 "use client";
 
-import { ReactNode } from "react";
+import { ReactNode, useState } from "react";
+import { PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { ArrowLeft } from "lucide-react";
 
 interface EditorLayoutProps {
-  title: string;
-  onBack: () => void;
-  badge?: ReactNode;
+  header: ReactNode;
+  leftPanel?: ReactNode;
   preview: ReactNode;
-  controls: ReactNode;
-  timeline?: ReactNode;
+  rightPanel?: ReactNode;
+  bottomBar?: ReactNode;
 }
 
 export default function EditorLayout({
-  title,
-  onBack,
-  badge,
+  header,
+  leftPanel,
   preview,
-  controls,
-  timeline,
+  rightPanel,
+  bottomBar,
 }: EditorLayoutProps) {
+  const [leftOpen, setLeftOpen] = useState(true);
+  const [rightOpen, setRightOpen] = useState(true);
+
   return (
-    <div className="min-h-screen flex flex-col">
-      <div className="flex-1 p-4 md:p-6">
-        <div className="max-w-7xl mx-auto space-y-4">
-          {/* Header */}
-          <div className="flex items-center gap-3">
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={onBack}
-              className="text-muted-foreground"
-            >
-              <ArrowLeft className="h-4 w-4" />
-              Back
-            </Button>
-            <h1 className="text-lg font-semibold text-foreground truncate flex-1">
-              {title}
-            </h1>
-            {badge}
-          </div>
-
-          {/* Two-column layout */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            {/* LEFT: Video preview */}
-            <div className="lg:sticky lg:top-4 lg:self-start space-y-4">
-              {preview}
-            </div>
-
-            {/* RIGHT: Controls */}
-            <div className="space-y-5">
-              {controls}
-            </div>
-          </div>
-
-          {/* Full-width timeline below */}
-          {timeline && (
-            <div className="mt-2">
-              {timeline}
-            </div>
-          )}
-        </div>
+    <div className="h-screen flex flex-col bg-neutral-950 overflow-hidden">
+      {/* Top bar */}
+      <div className="shrink-0 bg-background border-b border-border px-3 py-1.5 flex items-center gap-1">
+        {/* Left panel toggle */}
+        {leftPanel && (
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8 shrink-0 text-muted-foreground hidden lg:flex"
+            onClick={() => setLeftOpen(!leftOpen)}
+          >
+            {leftOpen ? <PanelLeftClose className="h-4 w-4" /> : <PanelLeftOpen className="h-4 w-4" />}
+          </Button>
+        )}
+        <div className="flex-1 min-w-0">{header}</div>
+        {/* Right panel toggle */}
+        {rightPanel && (
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8 shrink-0 text-muted-foreground hidden lg:flex"
+            onClick={() => setRightOpen(!rightOpen)}
+          >
+            {rightOpen ? <PanelRightClose className="h-4 w-4" /> : <PanelRightOpen className="h-4 w-4" />}
+          </Button>
+        )}
       </div>
+
+      {/* Main area - desktop: horizontal panels, mobile: vertical scroll */}
+      <div className="flex-1 flex overflow-hidden min-h-0">
+        {/* Left panel */}
+        {leftPanel && leftOpen && (
+          <div className="hidden lg:flex w-[220px] shrink-0 border-r border-border bg-background flex-col overflow-y-auto p-3">
+            {leftPanel}
+          </div>
+        )}
+
+        {/* Center - canvas/preview area */}
+        <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
+          {/* Video canvas - fills available space */}
+          <div className="flex-1 flex items-center justify-center min-h-0 overflow-hidden">
+            {preview}
+          </div>
+        </div>
+
+        {/* Right panel */}
+        {rightPanel && rightOpen && (
+          <div className="hidden lg:flex w-[300px] shrink-0 border-l border-border bg-background flex-col overflow-y-auto">
+            {rightPanel}
+          </div>
+        )}
+      </div>
+
+      {/* Bottom bar */}
+      {bottomBar && (
+        <div className="shrink-0 border-t border-border bg-background">
+          {bottomBar}
+        </div>
+      )}
     </div>
   );
 }

@@ -328,6 +328,39 @@ export async function extractAudio(
   return outputPath;
 }
 
+/* ---------- Text Overlays (drawtext) ---------- */
+
+export interface TextOverlay {
+  id: string;
+  text: string;
+  x: number; // percentage 0-100
+  y: number; // percentage 0-100
+  fontSize: number;
+  color: string; // hex #RRGGBB
+}
+
+function escapeDrawtextValue(text: string): string {
+  return text.replace(/\\/g, "\\\\").replace(/'/g, "'\\''");
+}
+
+function buildDrawtextChain(
+  overlays: TextOverlay[],
+  outputWidth: number,
+  outputHeight: number
+): string {
+  if (!overlays || overlays.length === 0) return "";
+  const fontScale = outputWidth / 400;
+  return overlays
+    .map((o) => {
+      const x = Math.round((outputWidth * o.x) / 100);
+      const y = Math.round((outputHeight * o.y) / 100);
+      const sz = Math.round(o.fontSize * fontScale);
+      const escaped = escapeDrawtextValue(o.text);
+      return `drawtext=text='${escaped}':x=${x}:y=${y}:fontsize=${sz}:fontcolor=${o.color}:borderw=2:bordercolor=black@0.7:shadowcolor=black@0.5:shadowx=1:shadowy=2`;
+    })
+    .join(",");
+}
+
 // Build rounded-corner geq filter with a specific pixel radius
 function buildRoundedCornersGeq(radiusPx: number): string {
   const R = radiusPx;
@@ -342,7 +375,8 @@ export async function createClipWithCaptions(
   captions: CaptionSegment[],
   style?: CaptionStyle,
   layout?: VideoLayout,
-  template?: ReelTemplate
+  template?: ReelTemplate,
+  textOverlays?: TextOverlay[]
 ): Promise<string> {
   const userDir = getUserTmpDir(userId);
   const outputFilename = `clip_${Date.now()}_${Math.random().toString(36).slice(2)}.mp4`;
@@ -389,12 +423,15 @@ export async function createClipWithCaptions(
         cropFilter = `crop=iw:iw/${targetRatio},`;
       }
 
+      const dt = buildDrawtextChain(textOverlays || [], REEL_WIDTH, REEL_HEIGHT);
+      const dtSuffix = dt ? `,${dt}` : "";
+
       ffmpegArgs = [
         "-y",
         "-ss", start.toString(),
         "-i", videoPath,
         "-t", duration.toString(),
-        "-vf", `${cropFilter}scale=${REEL_WIDTH}:${REEL_HEIGHT},ass=${escapedAssPath}`,
+        "-vf", `${cropFilter}scale=${REEL_WIDTH}:${REEL_HEIGHT},ass=${escapedAssPath}${dtSuffix}`,
         "-c:v", "libx264",
         "-preset", "fast",
         "-crf", "23",
@@ -415,10 +452,13 @@ export async function createClipWithCaptions(
         videoChain = `[0:v]ass=${escapedAssPath},scale=${scaledW}:-2[vid]`;
       }
 
+      const dt = buildDrawtextChain(textOverlays || [], REEL_WIDTH, REEL_HEIGHT);
+      const dtSuffix = dt ? `,${dt}` : "";
+
       const filterComplex = [
         videoChain,
         `color=black:s=${REEL_WIDTH}x${REEL_HEIGHT}[bg]`,
-        `[bg][vid]overlay=(W-w)/2:(H-h)/2:shortest=1`,
+        `[bg][vid]overlay=(W-w)/2:(H-h)/2:shortest=1${dtSuffix}`,
       ].join(";");
 
       ffmpegArgs = [
@@ -437,12 +477,17 @@ export async function createClipWithCaptions(
       ];
     } else {
       // Original format: just encode with even dimensions + subtitles
+      const evenW = Math.floor(width / 2) * 2;
+      const evenH = Math.floor(height / 2) * 2;
+      const dt = buildDrawtextChain(textOverlays || [], evenW, evenH);
+      const dtSuffix = dt ? `,${dt}` : "";
+
       ffmpegArgs = [
         "-y",
         "-ss", start.toString(),
         "-i", videoPath,
         "-t", duration.toString(),
-        "-vf", `scale=trunc(iw/2)*2:trunc(ih/2)*2,ass=${escapedAssPath}`,
+        "-vf", `scale=trunc(iw/2)*2:trunc(ih/2)*2,ass=${escapedAssPath}${dtSuffix}`,
         "-c:v", "libx264",
         "-preset", "fast",
         "-crf", "23",
