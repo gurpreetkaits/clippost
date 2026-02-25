@@ -37,19 +37,43 @@ interface VideoPreviewPanelProps {
   generating: boolean;
 }
 
-/* ---------- Caption position helpers ---------- */
+/* ---------- Caption position helpers (mirrors ASS export) ---------- */
 
-const POSITION_MAP: Record<string, { x: number; y: number }> = {
-  top: { x: 50, y: 6 },
-  center: { x: 50, y: 50 },
-  bottom: { x: 50, y: 78 },
+/**
+ * ASS alignment + marginV mapping:
+ *  - alignment 2 (bottom-center): marginV = 22% from bottom edge
+ *  - alignment 8 (top-center):    marginV =  6% from top edge
+ *  - alignment 5 (center):        vertically centered
+ *
+ * anchor tells us which edge marginPct is measured from.
+ */
+interface CaptionPosConfig {
+  anchor: "top" | "bottom" | "center";
+  marginPct: number; // distance from the anchor edge as %
+}
+
+const POSITION_CONFIG: Record<string, CaptionPosConfig> = {
+  top:    { anchor: "top",    marginPct: 6 },
+  center: { anchor: "center", marginPct: 0 },
+  bottom: { anchor: "bottom", marginPct: 22 },
+  custom: { anchor: "bottom", marginPct: 22 },
 };
 
-function getCaptionPosition(style: CaptionStyle): { x: number; y: number } {
-  if (style.position === "custom" && style.customX != null && style.customY != null) {
-    return { x: style.customX, y: style.customY };
+function getCaptionPosStyle(style: CaptionStyle): React.CSSProperties {
+  const config = POSITION_CONFIG[style.position] ?? POSITION_CONFIG.bottom;
+  const css: React.CSSProperties = { left: "50%" };
+
+  if (config.anchor === "bottom") {
+    css.bottom = `${config.marginPct}%`;
+    css.transform = "translateX(-50%)";
+  } else if (config.anchor === "top") {
+    css.top = `${config.marginPct}%`;
+    css.transform = "translateX(-50%)";
+  } else {
+    css.top = "50%";
+    css.transform = "translate(-50%, -50%)";
   }
-  return POSITION_MAP[style.position] || POSITION_MAP.bottom;
+  return css;
 }
 
 /* ---------- Progress / scrub bar ---------- */
@@ -304,18 +328,16 @@ export default function VideoPreviewPanel({
 
   const progress = clipDuration > 0 ? displayRelTime / clipDuration : 0;
 
-  // Caption styling
+  // Caption styling — matches ASS export: fontSize at 1080p, boxPad = fontSize*0.5
   const scale = containerHeight / 1080;
-  const captionPos = getCaptionPosition(captionStyle);
+  const captionPosStyle = getCaptionPosStyle(captionStyle);
 
   const bgAlpha = Math.round((captionStyle.bgOpacity / 100) * 255)
     .toString(16)
     .padStart(2, "0");
   const scaledFontSize = Math.max(10, Math.round(captionStyle.fontSize * scale));
-  const scaledPadX = Math.round(Math.max(4, captionStyle.fontSize * 0.35 * scale));
-  const scaledPadY = Math.round(Math.max(2, captionStyle.fontSize * 0.2 * scale));
-
-  const isPresetPosition = captionStyle.position !== "custom";
+  // ASS BorderStyle 3 uses Outline value as box padding (= fontSize * 0.5)
+  const scaledBoxPad = Math.max(3, Math.round(captionStyle.fontSize * 0.5 * scale));
 
   return (
     <div
@@ -343,26 +365,23 @@ export default function VideoPreviewPanel({
           />
         </div>
 
-        {/* Caption overlay */}
+        {/* Caption overlay — mirrors ASS export positioning & styling */}
         {!showingClip && activeCaption && (
           <div
             className="absolute pointer-events-none z-10"
-            style={{
-              left: isPresetPosition ? `${captionPos.x}%` : `${captionPos.x}%`,
-              top: `${captionPos.y}%`,
-              transform: isPresetPosition ? "translateX(-50%)" : "translate(-50%, -50%)",
-            }}
+            style={captionPosStyle}
           >
             <div
-              className="rounded-lg text-center whitespace-nowrap"
+              className="text-center whitespace-nowrap"
               style={{
                 fontFamily: captionStyle.fontFamily,
                 fontSize: `${scaledFontSize}px`,
-                padding: `${scaledPadY}px ${scaledPadX}px`,
+                padding: `${scaledBoxPad}px`,
                 color: captionStyle.textColor,
                 backgroundColor: `${captionStyle.bgColor}${bgAlpha}`,
                 fontWeight: captionStyle.bold ? "bold" : "normal",
                 fontStyle: captionStyle.italic ? "italic" : "normal",
+                borderRadius: `${Math.max(2, Math.round(scaledBoxPad * 0.3))}px`,
               }}
             >
               {activeCaption.text}

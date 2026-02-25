@@ -48,7 +48,8 @@ function EditorContent() {
   const captionUndo = useUndo<CaptionSegment[]>([]);
   const captions = captionUndo.state;
   const setCaptions = captionUndo.set;
-  const [captionStyle, setCaptionStyle] = useState<CaptionStyle>(DEFAULT_CAPTION_STYLE);
+  const styleUndo = useUndo<CaptionStyle>(DEFAULT_CAPTION_STYLE);
+  const captionStyle = styleUndo.state;
   const [activeTemplateId, setActiveTemplateId] = useState<string | undefined>();
   const [clipFilename, setClipFilename] = useState<string | null>(null);
   const [transcribing, setTranscribing] = useState(false);
@@ -123,7 +124,7 @@ function EditorContent() {
           setEnd(clip.endTime);
           setClipFilename(clip.filename);
           if (clip.captionStyle) {
-            setCaptionStyle(clip.captionStyle as CaptionStyle);
+            styleUndo.set(clip.captionStyle as CaptionStyle);
           }
         } catch {
           // show empty state
@@ -403,19 +404,24 @@ function EditorContent() {
 
   const handleTemplateSelect = useCallback(
     (template: ReelTemplate, id?: string) => {
-      setCaptionStyle(templateToCaptionStyle(template));
+      styleUndo.set(templateToCaptionStyle(template));
       setActiveTemplateId(id);
     },
-    []
+    [styleUndo]
   );
 
   const handleCaptionStyleChange = useCallback(
     (s: CaptionStyle) => {
-      setCaptionStyle(s);
+      styleUndo.set(s);
       setActiveTemplateId(undefined);
     },
-    []
+    [styleUndo]
   );
+
+  const handleResetCaptionStyle = useCallback(() => {
+    styleUndo.set(DEFAULT_CAPTION_STYLE);
+    setActiveTemplateId(undefined);
+  }, [styleUndo]);
 
   if (loaded && !videoData) {
     return (
@@ -533,6 +539,9 @@ function EditorContent() {
         captionStyle={captionStyle}
         onCaptionStyleChange={handleCaptionStyleChange}
         onTemplateSelect={handleTemplateSelect}
+        onUndo={styleUndo.undo}
+        onReset={handleResetCaptionStyle}
+        canUndo={styleUndo.canUndo}
       />
     </>
   );
