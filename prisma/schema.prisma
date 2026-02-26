@@ -47,6 +47,7 @@ model User {
   billingEvents      BillingEvent[]
   captionTemplates   CaptionTemplate[]
   musicTracks        MusicTrack[]
+  notes              Note[]
 
   @@map("users")
 }
@@ -234,4 +235,16 @@ model MusicTrack {
 
   @@index([userId])
   @@map("music_tracks")
+}
+
+model Note {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  url       String
+  tags      String[] @default([])
+  createdAt DateTime @default(now())
+
+  @@index([userId, createdAt])
+  @@map("notes")
 }

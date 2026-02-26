@@ -224,6 +224,15 @@ function HomeContent() {
     return () => clearInterval(interval);
   }, [loading, progress]);
 
+  // Pre-fill URL from query param (e.g. from Notes page)
+  useEffect(() => {
+    const prefillUrl = searchParams.get("url");
+    if (prefillUrl) {
+      setUrl(prefillUrl);
+      setInputMode("youtube");
+    }
+  }, [searchParams]);
+
   // Fetch user preferences
   useEffect(() => {
     if (!isAuthenticated) return;
