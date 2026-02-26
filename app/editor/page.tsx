@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useEffect, Suspense } from "react";
+import { useState, useCallback, useEffect, useRef, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useSession } from "next-auth/react";
 import EditorLayout from "@/components/editor/EditorLayout";
@@ -8,6 +8,7 @@ import EditorHeader from "@/components/editor/EditorHeader";
 import VideoPreviewPanel from "@/components/editor/VideoPreviewPanel";
 import ActionBar from "@/components/editor/ActionBar";
 import CaptionStyleModal from "@/components/editor/CaptionStyleModal";
+import MusicModal from "@/components/editor/MusicModal";
 import ClipSelector from "@/components/ClipSelector";
 import { Button } from "@/components/ui/button";
 import { Loader2, ArrowLeft, Film } from "lucide-react";
@@ -39,6 +40,8 @@ function EditorContent() {
 
   const [videoData, setVideoData] = useState<VideoData | null>(null);
   const [loaded, setLoaded] = useState(false);
+  const restoredFromStorage = useRef(false);
+  const hasUserWork = useRef(false);
 
   // Editor state
   const [start, setStart] = useState(0);
@@ -77,6 +80,72 @@ function EditorContent() {
   // Caption style modal
   const [captionStyleModalOpen, setCaptionStyleModalOpen] = useState(false);
 
+  // Background music state
+  const [musicModalOpen, setMusicModalOpen] = useState(false);
+  const [musicSettings, setMusicSettings] = useState<{
+    enabled: boolean;
+    trackId: string | null;
+    trackName: string;
+    trackFilename: string;
+    volume: number;
+    startTime: number;
+    endTime: number | null;
+  }>({ enabled: false, trackId: null, trackName: "", trackFilename: "", volume: 30, startTime: 0, endTime: null });
+
+  // --- localStorage persistence ---
+  const getStorageKey = useCallback(() => {
+    if (!videoData) return null;
+    return `clippost-editor-${videoData.filename}`;
+  }, [videoData]);
+
+  // Save editor state to localStorage on meaningful changes
+  useEffect(() => {
+    if (!loaded || !videoData) return;
+    // Don't save during the initial restoration frame
+    if (!restoredFromStorage.current) {
+      restoredFromStorage.current = true;
+      return;
+    }
+    const key = getStorageKey();
+    if (!key) return;
+
+    const state = {
+      start,
+      end,
+      language,
+      captions,
+      captionStyle,
+      activeTemplateId,
+      enhanceEnabled,
+      colorGradingEnabled: colorGrading.enabled,
+      colorGradingParams: colorGrading.params,
+      colorGradingCorrections,
+      musicSettings,
+      savedAt: Date.now(),
+    };
+
+    try {
+      localStorage.setItem(key, JSON.stringify(state));
+    } catch { /* storage full or unavailable */ }
+  }, [loaded, videoData, getStorageKey, start, end, language, captions, captionStyle, activeTemplateId, enhanceEnabled, colorGrading, colorGradingCorrections, musicSettings]);
+
+  // Track if user has done meaningful work (for reload confirmation)
+  useEffect(() => {
+    if (!loaded) return;
+    hasUserWork.current = captions.length > 0 || enhanceEnabled || colorGrading.enabled || musicSettings.enabled;
+  }, [loaded, captions, enhanceEnabled, colorGrading.enabled, musicSettings.enabled]);
+
+  // Reload confirmation
+  useEffect(() => {
+    const handler = (e: BeforeUnloadEvent) => {
+      if (hasUserWork.current) {
+        e.preventDefault();
+      }
+    };
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
+  }, []);
+
   // Clear stale previews when start/end changes
   useEffect(() => {
     setColorGrading((prev) => prev.gradedFilename ? { ...prev, gradedFilename: null } : prev);
@@ -84,13 +153,33 @@ function EditorContent() {
     setClipFilename(null);
   }, [start, end]);
 
-  // Fetch user language preference
+  // Fetch user preferences + default music track
   useEffect(() => {
     if (!isAuthenticated) return;
     fetch("/api/settings/preferences")
       .then((r) => (r.ok ? r.json() : null))
       .then((prefs) => {
         if (prefs?.defaultLanguage) setLanguage(prefs.defaultLanguage);
+        if (typeof prefs?.defaultMusicVolume === "number") {
+          setMusicSettings((prev) => ({ ...prev, volume: prefs.defaultMusicVolume }));
+        }
+      })
+      .catch(() => {});
+
+    // Load user's default music track
+    fetch("/api/music?default=true")
+      .then((r) => (r.ok ? r.json() : []))
+      .then((tracks: { id: string; originalName: string; filename: string }[]) => {
+        if (tracks.length > 0) {
+          const t = tracks[0];
+          setMusicSettings((prev) => ({
+            ...prev,
+            enabled: true,
+            trackId: t.id,
+            trackName: t.originalName,
+            trackFilename: t.filename,
+          }));
+        }
       })
       .catch(() => {});
   }, [isAuthenticated]);
@@ -136,11 +225,42 @@ function EditorContent() {
 
     if (videoParam) {
       const duration = durationParam ? parseFloat(durationParam) : 0;
+      const filename = videoParam;
       setVideoData({
-        filename: videoParam,
-        title: titleParam || videoParam.replace(/\.[^.]+$/, "").replace(/[_-]/g, " "),
+        filename,
+        title: titleParam || filename.replace(/\.[^.]+$/, "").replace(/[_-]/g, " "),
         duration,
       });
+
+      // Restore saved state from localStorage if available
+      const storageKey = `clippost-editor-${filename}`;
+      const saved = localStorage.getItem(storageKey);
+      if (saved) {
+        try {
+          const s = JSON.parse(saved);
+          // Only restore if saved within the last 24 hours
+          if (s.savedAt && Date.now() - s.savedAt < 24 * 60 * 60 * 1000) {
+            if (typeof s.start === "number") setStart(s.start);
+            if (typeof s.end === "number") setEnd(s.end);
+            if (s.language) setLanguage(s.language);
+            if (s.captions?.length > 0) captionUndo.reset(s.captions);
+            if (s.captionStyle) styleUndo.set(s.captionStyle as CaptionStyle);
+            if (s.activeTemplateId) setActiveTemplateId(s.activeTemplateId);
+            if (s.enhanceEnabled) setEnhanceEnabled(true);
+            if (s.colorGradingEnabled && s.colorGradingParams) {
+              setColorGrading({ enabled: true, params: s.colorGradingParams, gradedFilename: null });
+              if (s.colorGradingCorrections) setColorGradingCorrections(s.colorGradingCorrections);
+            }
+            if (s.musicSettings?.enabled) {
+              setMusicSettings(s.musicSettings);
+            }
+            setLoaded(true);
+            return;
+          }
+        } catch { /* ignore corrupt data */ }
+      }
+
+      // No saved state — use URL params
       if (startParam) setStart(parseFloat(startParam));
       if (endParam) setEnd(parseFloat(endParam));
       else if (duration > 0) setEnd(Math.min(30, duration));
@@ -339,6 +459,53 @@ function EditorContent() {
     }
   }, [videoData, language, consumeSSE]);
 
+  const handleSelectTrack = useCallback(
+    (track: { id: string; name: string; filename: string; duration: number } | null) => {
+      if (track) {
+        setMusicSettings((prev) => ({
+          ...prev,
+          enabled: true,
+          trackId: track.id,
+          trackName: track.name,
+          trackFilename: track.filename,
+          startTime: 0,
+          endTime: null,
+        }));
+      } else {
+        setMusicSettings((prev) => ({
+          ...prev,
+          enabled: false,
+          trackId: null,
+          trackName: "",
+          trackFilename: "",
+          startTime: 0,
+          endTime: null,
+        }));
+      }
+    },
+    []
+  );
+
+  const handleMusicVolumeChange = useCallback((volume: number) => {
+    setMusicSettings((prev) => ({ ...prev, volume }));
+  }, []);
+
+  const handleMusicTrimChange = useCallback((startTime: number, endTime: number | null) => {
+    setMusicSettings((prev) => ({ ...prev, startTime, endTime }));
+  }, []);
+
+  const handleRemoveMusic = useCallback(() => {
+    setMusicSettings((prev) => ({
+      ...prev,
+      enabled: false,
+      trackId: null,
+      trackName: "",
+      trackFilename: "",
+      startTime: 0,
+      endTime: null,
+    }));
+  }, []);
+
   const doGenerate = useCallback(async (): Promise<string | null> => {
     if (!videoData) return null;
     setGenerating(true);
@@ -370,6 +537,10 @@ function EditorContent() {
           layout: DEFAULT_LAYOUT,
           colorGrading: colorGrading.enabled ? colorGrading.params : undefined,
           enhance: enhanceEnabled,
+          musicTrackId: musicSettings.enabled ? musicSettings.trackId : undefined,
+          musicVolume: musicSettings.enabled ? musicSettings.volume : undefined,
+          musicStartTime: musicSettings.enabled && musicSettings.startTime > 0 ? musicSettings.startTime : undefined,
+          musicEndTime: musicSettings.enabled && musicSettings.endTime != null ? musicSettings.endTime : undefined,
         }),
       });
       const data = await response.json();
@@ -383,7 +554,7 @@ function EditorContent() {
     } finally {
       setGenerating(false);
     }
-  }, [videoData, start, end, captions, captionStyle, language, activeTemplateId, colorGrading, enhanceEnabled, setCaptions]);
+  }, [videoData, start, end, captions, captionStyle, language, activeTemplateId, colorGrading, enhanceEnabled, musicSettings, setCaptions]);
 
   const handleGenerateClip = useCallback(async () => {
     await doGenerate();
@@ -479,6 +650,14 @@ function EditorContent() {
             enhancedFilename={enhancedFilename}
             gradedFilename={colorGrading.gradedFilename}
             generating={generating}
+            musicStreamUrl={
+              musicSettings.enabled && musicSettings.trackFilename
+                ? `/api/music/stream?file=${encodeURIComponent(musicSettings.trackFilename)}`
+                : undefined
+            }
+            musicVolume={musicSettings.enabled ? musicSettings.volume : 0}
+            musicStartTime={musicSettings.startTime}
+            musicEndTime={musicSettings.endTime}
           />
         }
         rightPanel={
@@ -504,6 +683,10 @@ function EditorContent() {
             autoTrimReason={autoTrimReason}
             onAutoTrim={handleAutoTrim}
             onOpenCaptionStyle={() => setCaptionStyleModalOpen(true)}
+            musicEnabled={musicSettings.enabled}
+            musicTrackName={musicSettings.trackName}
+            onOpenMusic={() => setMusicModalOpen(true)}
+            onRemoveMusic={handleRemoveMusic}
           />
         }
         bottomBar={
@@ -542,6 +725,18 @@ function EditorContent() {
         onUndo={styleUndo.undo}
         onReset={handleResetCaptionStyle}
         canUndo={styleUndo.canUndo}
+      />
+
+      <MusicModal
+        open={musicModalOpen}
+        onOpenChange={setMusicModalOpen}
+        selectedTrackId={musicSettings.trackId}
+        musicVolume={musicSettings.volume}
+        musicStartTime={musicSettings.startTime}
+        musicEndTime={musicSettings.endTime}
+        onSelectTrack={handleSelectTrack}
+        onVolumeChange={handleMusicVolumeChange}
+        onTrimChange={handleMusicTrimChange}
       />
     </>
   );

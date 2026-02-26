@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { downloadVideo, isValidYouTubeUrl } from "@/lib/youtube";
+import { downloadVideo, isValidVideoUrl } from "@/lib/youtube";
 import { optionalAuth } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { checkUsageLimit } from "@/lib/usage";
@@ -21,9 +21,9 @@ export async function POST(request: NextRequest) {
 
     const { url } = await request.json();
 
-    if (!url || !isValidYouTubeUrl(url)) {
+    if (!url || !isValidVideoUrl(url)) {
       return NextResponse.json(
-        { error: "Invalid YouTube URL" },
+        { error: "Invalid URL. Paste a YouTube or Instagram Reel link." },
         { status: 400 }
       );
     }

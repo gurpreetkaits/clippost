@@ -15,6 +15,7 @@ import {
   Palette,
   Scissors,
   Type,
+  Music2,
   Loader2,
   Check,
   X,
@@ -49,6 +50,11 @@ interface ActionBarProps {
   onAutoTrim: () => void;
   // Caption Style
   onOpenCaptionStyle: () => void;
+  // Background Music
+  musicEnabled: boolean;
+  musicTrackName: string;
+  onOpenMusic: () => void;
+  onRemoveMusic: () => void;
 }
 
 export default function ActionBar({
@@ -73,6 +79,10 @@ export default function ActionBar({
   autoTrimReason,
   onAutoTrim,
   onOpenCaptionStyle,
+  musicEnabled,
+  musicTrackName,
+  onOpenMusic,
+  onRemoveMusic,
 }: ActionBarProps) {
   const { status } = useSession();
   const isAuthenticated = status === "authenticated";
@@ -167,6 +177,19 @@ export default function ActionBar({
         done={false}
         locked={false}
         onClick={onOpenCaptionStyle}
+      />
+
+      {/* 6. Background Music */}
+      <ActionButton
+        icon={Music2}
+        label="Background Music"
+        loading={false}
+        loadingText=""
+        done={musicEnabled}
+        doneBadge={musicTrackName}
+        locked={!isAuthenticated}
+        onClick={() => requiresAuth(onOpenMusic)}
+        onRemove={musicEnabled ? onRemoveMusic : undefined}
       />
     </div>
   );

@@ -24,13 +24,31 @@ function getUserTmpDir(userId: string): string {
   return dir;
 }
 
+/**
+ * Detect video source from URL hostname.
+ * Returns "youtube" | "instagram" | null.
+ */
+export function detectVideoSource(url: string): "youtube" | "instagram" | null {
+  try {
+    const host = new URL(url).hostname.replace(/^www\./, "");
+    if (host === "youtube.com" || host === "youtu.be") return "youtube";
+    if (host === "instagram.com") return "instagram";
+  } catch {
+    // malformed URL
+  }
+  return null;
+}
+
 export function isValidYouTubeUrl(url: string): boolean {
-  const patterns = [
-    /^https?:\/\/(www\.)?youtube\.com\/watch\?v=[\w-]+/,
-    /^https?:\/\/youtu\.be\/[\w-]+/,
-    /^https?:\/\/(www\.)?youtube\.com\/shorts\/[\w-]+/,
-  ];
-  return patterns.some((p) => p.test(url));
+  return detectVideoSource(url) === "youtube";
+}
+
+export function isValidInstagramUrl(url: string): boolean {
+  return detectVideoSource(url) === "instagram";
+}
+
+export function isValidVideoUrl(url: string): boolean {
+  return detectVideoSource(url) !== null;
 }
 
 export interface VideoMetadata {
@@ -46,13 +64,19 @@ export async function downloadVideo(
   url: string
 ): Promise<VideoMetadata> {
   const userDir = getUserTmpDir(userId);
+  const source = detectVideoSource(url);
 
-  // Get video info first (avoid TV client which triggers DRM)
+  // YouTube-specific extractor args (avoid TV client which triggers DRM)
+  const extractorArgs =
+    source === "youtube"
+      ? ["--extractor-args", "youtube:player_client=mweb,web;player_skip=configs,webpage"]
+      : [];
+
+  // Get video info first
   const { stdout: infoJson } = await execFileAsync("yt-dlp", [
     "--dump-json",
     "--no-playlist",
-    "--extractor-args",
-    "youtube:player_client=mweb,web;player_skip=configs,webpage",
+    ...extractorArgs,
     ...getCookiesArgs(),
     url,
   ]);
@@ -74,8 +98,7 @@ export async function downloadVideo(
         "-o",
         filepath,
         "--no-playlist",
-        "--extractor-args",
-        "youtube:player_client=mweb,web;player_skip=configs,webpage",
+        ...extractorArgs,
         ...getCookiesArgs(),
         url,
       ],

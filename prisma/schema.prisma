@@ -29,10 +29,11 @@ model User {
   useAiCaptions     Boolean @default(true)
 
   // Defaults
-  defaultLanguage String  @default("en-IN")
-  defaultFormat   String  @default("original")
-  defaultFrame    String  @default("cinema")
-  autonomousMode  Boolean @default(false)
+  defaultLanguage    String  @default("en-IN")
+  defaultFormat      String  @default("original")
+  defaultFrame       String  @default("cinema")
+  autonomousMode     Boolean @default(false)
+  defaultMusicVolume Int     @default(30)
 
   // API access
   apiKey          String? @unique
@@ -45,6 +46,7 @@ model User {
   usageRecords       UsageRecord[]
   billingEvents      BillingEvent[]
   captionTemplates   CaptionTemplate[]
+  musicTracks        MusicTrack[]
 
   @@map("users")
 }
@@ -217,4 +219,19 @@ model Project {
 
   @@index([userId, updatedAt])
   @@map("projects")
+}
+
+model MusicTrack {
+  id           String   @id @default(cuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  filename     String
+  originalName String
+  duration     Float
+  isFavorite   Boolean  @default(false)
+  isDefault    Boolean  @default(false)
+  createdAt    DateTime @default(now())
+
+  @@index([userId])
+  @@map("music_tracks")
 }

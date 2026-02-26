@@ -9,6 +9,8 @@ import { checkUsageLimit } from "@/lib/usage";
 import { configToTemplate } from "@/lib/caption-template";
 import type { ReelTemplate } from "@/lib/caption-template";
 import type { ColorGradingParams } from "@/lib/color-grading";
+import type { MusicMixOptions } from "@/lib/ffmpeg";
+import { getMusicPath } from "@/lib/music";
 
 export async function POST(request: NextRequest) {
   const authResult = await requireAuth();
@@ -35,6 +37,10 @@ export async function POST(request: NextRequest) {
       textOverlays,
       colorGrading,
       enhance,
+      musicTrackId,
+      musicVolume,
+      musicStartTime,
+      musicEndTime,
     }: {
       filename: string;
       start: number;
@@ -46,6 +52,10 @@ export async function POST(request: NextRequest) {
       textOverlays?: TextOverlay[];
       colorGrading?: ColorGradingParams;
       enhance?: boolean;
+      musicTrackId?: string;
+      musicVolume?: number;
+      musicStartTime?: number;
+      musicEndTime?: number;
     } = await request.json();
 
     if (!filename || start === undefined || end === undefined) {
@@ -76,6 +86,22 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    // Resolve background music if provided
+    let musicOption: MusicMixOptions | undefined;
+    if (musicTrackId) {
+      const track = await prisma.musicTrack.findFirst({
+        where: { id: musicTrackId, userId },
+      });
+      if (track) {
+        musicOption = {
+          filePath: getMusicPath(userId, track.filename),
+          volume: typeof musicVolume === "number" ? musicVolume : 30,
+          startTime: typeof musicStartTime === "number" ? musicStartTime : undefined,
+          endTime: typeof musicEndTime === "number" ? musicEndTime : undefined,
+        };
+      }
+    }
+
     const videoPath = getVideoPath(userId, filename);
     const shortCaptions = splitLongSegments(captions || []);
     const clipFilename = await createClipWithCaptions(
@@ -89,7 +115,8 @@ export async function POST(request: NextRequest) {
       template,
       textOverlays,
       colorGrading,
-      enhance
+      enhance,
+      musicOption
     );
 
     // Find the video record if it exists (by youtubeId or filename)

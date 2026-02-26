@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAuth, authenticateApiKey } from "@/lib/auth";
 import { prisma } from "@/lib/db";
-import { isValidYouTubeUrl, downloadVideo, getVideoPath } from "@/lib/youtube";
+import { isValidVideoUrl, downloadVideo, getVideoPath } from "@/lib/youtube";
 import { extractFullAudio, createClipWithCaptions, cleanup, CaptionSegment } from "@/lib/ffmpeg";
 import { splitLongSegments } from "@/lib/whisper";
 import { transcribeFullAudioSarvam } from "@/lib/sarvam";
@@ -62,8 +62,8 @@ export async function POST(request: NextRequest) {
 
   const { url, purpose } = body;
 
-  if (!url || !isValidYouTubeUrl(url)) {
-    return NextResponse.json({ error: "Invalid YouTube URL" }, { status: 400 });
+  if (!url || !isValidVideoUrl(url)) {
+    return NextResponse.json({ error: "Invalid URL. Paste a YouTube or Instagram Reel link." }, { status: 400 });
   }
 
   // Usage check disabled for local development

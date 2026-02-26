@@ -372,6 +372,13 @@ function buildRoundedCornersGeq(radiusPx: number): string {
   return `geq=lum='p(X,Y)':cb='p(X,Y)':cr='p(X,Y)':a='if(gt(abs(X-W/2),W/2-${R})*gt(abs(Y-H/2),H/2-${R}),if(lte(hypot(abs(X-W/2)-(W/2-${R}),abs(Y-H/2)-(H/2-${R})),${R}),255,0),255)'`;
 }
 
+export interface MusicMixOptions {
+  filePath: string;
+  volume: number; // 0-100
+  startTime?: number; // seconds into the music track to start from
+  endTime?: number;   // seconds into the music track to end at
+}
+
 export async function createClipWithCaptions(
   userId: string,
   videoPath: string,
@@ -383,7 +390,8 @@ export async function createClipWithCaptions(
   template?: ReelTemplate,
   textOverlays?: TextOverlay[],
   colorGrading?: ColorGradingParams,
-  enhance?: boolean
+  enhance?: boolean,
+  music?: MusicMixOptions
 ): Promise<string> {
   const userDir = getUserTmpDir(userId);
   const outputFilename = `clip_${Date.now()}_${Math.random().toString(36).slice(2)}.mp4`;
@@ -420,6 +428,43 @@ export async function createClipWithCaptions(
     const colorFilter = colorGrading ? buildColorGradingFilter(colorGrading) : "";
     const colorPrefix = enhancePrefix + (colorFilter ? `${colorFilter},` : "");
 
+    // Build audio mixing filter when background music is provided
+    const hasMusic = music && music.filePath && music.volume > 0;
+    const musicInputArgs = hasMusic ? ["-i", music.filePath] : [];
+    const musicInputIdx = hasMusic ? 1 : -1;
+
+    // Helper: returns audio filter chains for filter_complex and map args
+    function getAudioMixParts(): { chains: string[]; mapArgs: string[] } {
+      if (!hasMusic) {
+        return { chains: [], mapArgs: ["-c:a", "aac", "-b:a", "128k"] };
+      }
+      const vol = music.volume / 100;
+      const videoVol = Math.max(0.1, 1.0 - vol * 0.5);
+      const musicVol = vol;
+
+      // Build trim filter: select portion of track, then loop to fill clip
+      let trimFilter: string;
+      if (music.startTime != null && music.startTime > 0) {
+        const endPart = music.endTime != null ? `:${music.endTime}` : "";
+        trimFilter = `atrim=${music.startTime}${endPart},asetpts=PTS-STARTPTS,`;
+      } else if (music.endTime != null) {
+        trimFilter = `atrim=0:${music.endTime},asetpts=PTS-STARTPTS,`;
+      } else {
+        trimFilter = "";
+      }
+
+      return {
+        chains: [
+          `[0:a]volume=${videoVol.toFixed(2)}[a0]`,
+          `[${musicInputIdx}:a]${trimFilter}aloop=loop=-1:size=2e+09,atrim=0:${duration},volume=${musicVol.toFixed(2)}[a1]`,
+          `[a0][a1]amix=inputs=2:duration=first[aout]`,
+        ],
+        mapArgs: ["-map", "[aout]", "-c:a", "aac", "-b:a", "128k"],
+      };
+    }
+
+    const audioParts = getAudioMixParts();
+
     if (is916 && frameConfig && frameConfig.id === "fill") {
       // 9:16 Fill: crop center to 9:16 ratio, then scale to 1080x1920
       const targetRatio = REEL_WIDTH / REEL_HEIGHT; // 0.5625
@@ -436,20 +481,40 @@ export async function createClipWithCaptions(
       const dt = buildDrawtextChain(textOverlays || [], REEL_WIDTH, REEL_HEIGHT);
       const dtSuffix = dt ? `,${dt}` : "";
 
-      ffmpegArgs = [
-        "-y",
-        "-ss", start.toString(),
-        "-i", videoPath,
-        "-t", duration.toString(),
-        "-vf", `${cropFilter}scale=${REEL_WIDTH}:${REEL_HEIGHT},${colorPrefix}ass=${escapedAssPath}${dtSuffix}`,
-        "-c:v", "libx264",
-        "-preset", "fast",
-        "-crf", "23",
-        "-c:a", "aac",
-        "-b:a", "128k",
-        "-movflags", "+faststart",
-        outputPath,
-      ];
+      if (hasMusic) {
+        const videoChain = `[0:v]${cropFilter}scale=${REEL_WIDTH}:${REEL_HEIGHT},${colorPrefix}ass=${escapedAssPath}${dtSuffix}[vout]`;
+        const filterComplex = [videoChain, ...audioParts.chains].join(";");
+        ffmpegArgs = [
+          "-y",
+          "-ss", start.toString(),
+          "-i", videoPath,
+          ...musicInputArgs,
+          "-t", duration.toString(),
+          "-filter_complex", filterComplex,
+          "-map", "[vout]",
+          ...audioParts.mapArgs,
+          "-c:v", "libx264",
+          "-preset", "fast",
+          "-crf", "23",
+          "-movflags", "+faststart",
+          outputPath,
+        ];
+      } else {
+        ffmpegArgs = [
+          "-y",
+          "-ss", start.toString(),
+          "-i", videoPath,
+          "-t", duration.toString(),
+          "-vf", `${cropFilter}scale=${REEL_WIDTH}:${REEL_HEIGHT},${colorPrefix}ass=${escapedAssPath}${dtSuffix}`,
+          "-c:v", "libx264",
+          "-preset", "fast",
+          "-crf", "23",
+          "-c:a", "aac",
+          "-b:a", "128k",
+          "-movflags", "+faststart",
+          outputPath,
+        ];
+      }
     } else if (isFrameMode && frameConfig) {
       // 9:16 Frame template: burn captions on video first, then scale, round corners, overlay on black canvas
       const scaledW = Math.round((REEL_WIDTH * frameConfig.videoWidthPct) / 100 / 2) * 2;
@@ -465,26 +530,49 @@ export async function createClipWithCaptions(
       const dt = buildDrawtextChain(textOverlays || [], REEL_WIDTH, REEL_HEIGHT);
       const dtSuffix = dt ? `,${dt}` : "";
 
-      const filterComplex = [
+      const videoOverlay = `[bg][vid]overlay=(W-w)/2:(H-h)/2:shortest=1${dtSuffix}`;
+      const filterChains = [
         videoChain,
         `color=black:s=${REEL_WIDTH}x${REEL_HEIGHT}[bg]`,
-        `[bg][vid]overlay=(W-w)/2:(H-h)/2:shortest=1${dtSuffix}`,
-      ].join(";");
-
-      ffmpegArgs = [
-        "-y",
-        "-ss", start.toString(),
-        "-i", videoPath,
-        "-t", duration.toString(),
-        "-filter_complex", filterComplex,
-        "-c:v", "libx264",
-        "-preset", "fast",
-        "-crf", "23",
-        "-c:a", "aac",
-        "-b:a", "128k",
-        "-movflags", "+faststart",
-        outputPath,
       ];
+
+      if (hasMusic) {
+        filterChains.push(`${videoOverlay}[vout]`);
+        filterChains.push(...audioParts.chains);
+        const filterComplex = filterChains.join(";");
+        ffmpegArgs = [
+          "-y",
+          "-ss", start.toString(),
+          "-i", videoPath,
+          ...musicInputArgs,
+          "-t", duration.toString(),
+          "-filter_complex", filterComplex,
+          "-map", "[vout]",
+          ...audioParts.mapArgs,
+          "-c:v", "libx264",
+          "-preset", "fast",
+          "-crf", "23",
+          "-movflags", "+faststart",
+          outputPath,
+        ];
+      } else {
+        filterChains.push(videoOverlay);
+        const filterComplex = filterChains.join(";");
+        ffmpegArgs = [
+          "-y",
+          "-ss", start.toString(),
+          "-i", videoPath,
+          "-t", duration.toString(),
+          "-filter_complex", filterComplex,
+          "-c:v", "libx264",
+          "-preset", "fast",
+          "-crf", "23",
+          "-c:a", "aac",
+          "-b:a", "128k",
+          "-movflags", "+faststart",
+          outputPath,
+        ];
+      }
     } else {
       // Original format: just encode with even dimensions + subtitles
       const evenW = Math.floor(width / 2) * 2;
@@ -492,20 +580,40 @@ export async function createClipWithCaptions(
       const dt = buildDrawtextChain(textOverlays || [], evenW, evenH);
       const dtSuffix = dt ? `,${dt}` : "";
 
-      ffmpegArgs = [
-        "-y",
-        "-ss", start.toString(),
-        "-i", videoPath,
-        "-t", duration.toString(),
-        "-vf", `scale=trunc(iw/2)*2:trunc(ih/2)*2,${colorPrefix}ass=${escapedAssPath}${dtSuffix}`,
-        "-c:v", "libx264",
-        "-preset", "fast",
-        "-crf", "23",
-        "-c:a", "aac",
-        "-b:a", "128k",
-        "-movflags", "+faststart",
-        outputPath,
-      ];
+      if (hasMusic) {
+        const videoChain = `[0:v]scale=trunc(iw/2)*2:trunc(ih/2)*2,${colorPrefix}ass=${escapedAssPath}${dtSuffix}[vout]`;
+        const filterComplex = [videoChain, ...audioParts.chains].join(";");
+        ffmpegArgs = [
+          "-y",
+          "-ss", start.toString(),
+          "-i", videoPath,
+          ...musicInputArgs,
+          "-t", duration.toString(),
+          "-filter_complex", filterComplex,
+          "-map", "[vout]",
+          ...audioParts.mapArgs,
+          "-c:v", "libx264",
+          "-preset", "fast",
+          "-crf", "23",
+          "-movflags", "+faststart",
+          outputPath,
+        ];
+      } else {
+        ffmpegArgs = [
+          "-y",
+          "-ss", start.toString(),
+          "-i", videoPath,
+          "-t", duration.toString(),
+          "-vf", `scale=trunc(iw/2)*2:trunc(ih/2)*2,${colorPrefix}ass=${escapedAssPath}${dtSuffix}`,
+          "-c:v", "libx264",
+          "-preset", "fast",
+          "-crf", "23",
+          "-c:a", "aac",
+          "-b:a", "128k",
+          "-movflags", "+faststart",
+          outputPath,
+        ];
+      }
     }
 
     await execFileAsync("ffmpeg", ffmpegArgs, { timeout: 300000 });

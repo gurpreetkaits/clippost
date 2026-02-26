@@ -50,6 +50,13 @@ interface AutoTrimResult {
   segments: { start: number; end: number; text: string; words?: { word: string; start: number; end: number }[] }[];
 }
 
+interface DownloadResult {
+  filename: string;
+  title: string;
+  duration: number;
+  id: string;
+}
+
 interface ProgressState {
   step: string;
   message: string;
@@ -197,6 +204,9 @@ function HomeContent() {
   const [dragOver, setDragOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // Download result (non-auto-trim)
+  const [downloadResult, setDownloadResult] = useState<DownloadResult | null>(null);
+
   // Auto-trim state
   const [progress, setProgress] = useState<ProgressState | null>(null);
   const [autoTrimResult, setAutoTrimResult] = useState<AutoTrimResult | null>(null);
@@ -280,12 +290,13 @@ function HomeContent() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
+    setDownloadResult(null);
     setAutoTrimResult(null);
     setProgress(null);
     setLoading(true);
 
     if (!autoTrim) {
-      // Manual flow: download then navigate to editor
+      // Manual flow: download then show result with action buttons
       try {
         const response = await fetch("/api/download", {
           method: "POST",
@@ -295,14 +306,12 @@ function HomeContent() {
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || "Failed to download video");
 
-        let startTime = 0;
-        try {
-          const parsed = new URL(url);
-          const tParam = parsed.searchParams.get("t");
-          if (tParam) startTime = parseInt(tParam.replace("s", ""), 10) || 0;
-        } catch {}
-
-        goToEditor(data.filename, data.title, data.duration, startTime);
+        setDownloadResult({
+          filename: data.filename,
+          title: data.title,
+          duration: data.duration,
+          id: data.id,
+        });
       } catch (err) {
         setError(err instanceof Error ? err.message : "Something went wrong");
       } finally {
@@ -437,6 +446,17 @@ function HomeContent() {
     router.push("/editor");
   };
 
+  const handleEditDownload = () => {
+    if (!downloadResult) return;
+    let startTime = 0;
+    try {
+      const parsed = new URL(url);
+      const tParam = parsed.searchParams.get("t");
+      if (tParam) startTime = parseInt(tParam.replace("s", ""), 10) || 0;
+    } catch {}
+    goToEditor(downloadResult.filename, downloadResult.title, downloadResult.duration, startTime);
+  };
+
   const isAutoTrimReady = !autoTrim || purpose.trim().length > 0;
 
   // ─── Landing Page (unauthenticated, no active session) ───
@@ -450,8 +470,8 @@ function HomeContent() {
                 YouTube to Reels &amp; Shorts in seconds
               </h1>
               <p className="text-lg text-muted-foreground max-w-lg">
-                Paste a link, upload a video, pick a clip, add karaoke captions,
-                and publish straight to Instagram and YouTube. All from one tool.
+                Paste a YouTube or Instagram link, upload a video, pick a clip,
+                add karaoke captions, and publish straight to Instagram and YouTube.
               </p>
               <Button onClick={() => signIn("google")} variant="outline" size="lg" className="gap-2">
                 <svg viewBox="0 0 24 24" className="h-5 w-5">
@@ -540,7 +560,7 @@ function HomeContent() {
                     : "bg-muted/50 text-muted-foreground hover:bg-muted"
                 }`}
               >
-                YouTube URL
+                Paste URL
               </button>
               <button
                 type="button"
@@ -563,7 +583,7 @@ function HomeContent() {
                     type="url"
                     value={url}
                     onChange={(e) => setUrl(e.target.value)}
-                    placeholder="Paste a YouTube URL..."
+                    placeholder="Paste a YouTube or Instagram Reel URL..."
                     required
                     className="flex-1"
                     disabled={loading}
@@ -711,6 +731,47 @@ function HomeContent() {
               </div>
             )}
 
+            {/* Download Result Card */}
+            {downloadResult && (
+              <div className="mt-6 space-y-4 border-t pt-4">
+                <div className="space-y-2">
+                  <h3 className="font-semibold text-lg">{downloadResult.title}</h3>
+                  <p className="text-xs text-muted-foreground">
+                    Duration: {formatTimestamp(downloadResult.duration)}
+                  </p>
+                </div>
+
+                <video
+                  src={`/api/video?file=${encodeURIComponent(downloadResult.filename)}`}
+                  controls
+                  className="w-full rounded-lg"
+                />
+
+                <div className="flex gap-2">
+                  <a
+                    href={`/api/video?file=${encodeURIComponent(downloadResult.filename)}`}
+                    download={`${downloadResult.title}.mp4`}
+                    className="flex-1"
+                  >
+                    <Button variant="outline" className="w-full">
+                      <Download className="h-4 w-4 mr-2" /> Download
+                    </Button>
+                  </a>
+                  <Button variant="outline" className="flex-1" onClick={handleEditDownload}>
+                    <Film className="h-4 w-4 mr-2" /> Edit
+                  </Button>
+                  <div className="flex-1">
+                    <PublishButton
+                      clipFilename={downloadResult.filename}
+                      videoTitle={downloadResult.title}
+                      clipDuration={downloadResult.duration}
+                      language={language}
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
+
             {/* Auto-Trim Result Card */}
             {autoTrimResult && (
               <div className="mt-6 space-y-4 border-t pt-4">
@@ -838,7 +899,7 @@ function HomeContent() {
         <MyClips />
 
         <p className="text-center text-muted-foreground text-xs">
-          Supports YouTube videos, shorts, links, and file uploads
+          Supports YouTube, Instagram Reels, and file uploads
         </p>
       </div>
     </div>

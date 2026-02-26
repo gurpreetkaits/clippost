@@ -35,6 +35,10 @@ interface VideoPreviewPanelProps {
   enhancedFilename: string | null;
   gradedFilename: string | null;
   generating: boolean;
+  musicStreamUrl?: string;
+  musicVolume?: number; // 0-100
+  musicStartTime?: number;
+  musicEndTime?: number | null;
 }
 
 /* ---------- Caption position helpers (mirrors ASS export) ---------- */
@@ -163,10 +167,15 @@ export default function VideoPreviewPanel({
   enhancedFilename,
   gradedFilename,
   generating,
+  musicStreamUrl,
+  musicVolume = 0,
+  musicStartTime = 0,
+  musicEndTime,
 }: VideoPreviewPanelProps) {
   const canvasRef = useRef<HTMLDivElement>(null);
   const wrapperRef = useRef<HTMLDivElement>(null);
   const playerRef = useRef<VideoPlayerHandle | null>(null);
+  const musicAudioRef = useRef<HTMLAudioElement | null>(null);
 
   const clipUrl = clipFilename
     ? `/api/video?file=${encodeURIComponent(clipFilename)}`
@@ -215,6 +224,80 @@ export default function VideoPreviewPanel({
     document.addEventListener("fullscreenchange", handler);
     return () => document.removeEventListener("fullscreenchange", handler);
   }, []);
+
+  // --- Music audio sync ---
+  // Set volume
+  useEffect(() => {
+    const audio = musicAudioRef.current;
+    if (audio) {
+      audio.volume = Math.min(1, Math.max(0, musicVolume / 100));
+    }
+  }, [musicVolume]);
+
+  // Play/pause sync
+  useEffect(() => {
+    const audio = musicAudioRef.current;
+    if (!audio || !musicStreamUrl) return;
+
+    if (playing) {
+      // Calculate music position based on video position
+      const videoRelTime = (showingClip || showingProcessed) ? currentTime : currentTime - start;
+      const musicPos = musicStartTime + videoRelTime;
+      const effectiveEnd = musicEndTime ?? (audio.duration || Infinity);
+      const trimDuration = effectiveEnd - musicStartTime;
+
+      if (trimDuration > 0) {
+        // Loop within the trim range
+        const loopedPos = musicStartTime + (videoRelTime % trimDuration);
+        if (Math.abs(audio.currentTime - loopedPos) > 0.5) {
+          audio.currentTime = loopedPos;
+        }
+      } else {
+        audio.currentTime = musicPos;
+      }
+
+      audio.play().catch(() => {});
+    } else {
+      audio.pause();
+    }
+  // Only trigger on playing change, not on every currentTime tick
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [playing, musicStreamUrl]);
+
+  // Seek sync: when user scrubs, update music position
+  useEffect(() => {
+    if (scrubTime === null) return;
+    const audio = musicAudioRef.current;
+    if (!audio || !musicStreamUrl) return;
+
+    const effectiveEnd = musicEndTime ?? (audio.duration || Infinity);
+    const trimDuration = effectiveEnd - musicStartTime;
+
+    if (trimDuration > 0) {
+      const loopedPos = musicStartTime + (scrubTime % trimDuration);
+      audio.currentTime = loopedPos;
+    } else {
+      audio.currentTime = musicStartTime + scrubTime;
+    }
+  }, [scrubTime, musicStreamUrl, musicStartTime, musicEndTime]);
+
+  // Loop music within trim range during playback
+  useEffect(() => {
+    const audio = musicAudioRef.current;
+    if (!audio || !musicStreamUrl || !playing) return;
+
+    const effectiveEnd = musicEndTime ?? Infinity;
+    if (effectiveEnd === Infinity) return;
+
+    const handleTimeUpdate = () => {
+      if (audio.currentTime >= effectiveEnd) {
+        audio.currentTime = musicStartTime;
+      }
+    };
+
+    audio.addEventListener("timeupdate", handleTimeUpdate);
+    return () => audio.removeEventListener("timeupdate", handleTimeUpdate);
+  }, [playing, musicStreamUrl, musicStartTime, musicEndTime]);
 
   const activeCaption = captions.find(
     (c) => currentTime >= c.start && currentTime <= c.end
@@ -399,6 +482,16 @@ export default function VideoPreviewPanel({
           </div>
         )}
       </div>
+
+      {/* Hidden music audio layer */}
+      {musicStreamUrl && (
+        <audio
+          ref={musicAudioRef}
+          src={musicStreamUrl}
+          preload="auto"
+          style={{ display: "none" }}
+        />
+      )}
 
       {/* Custom controls */}
       <div className="w-full max-w-3xl shrink-0 space-y-0.5">

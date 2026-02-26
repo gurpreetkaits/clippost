@@ -46,19 +46,19 @@ export async function POST(request: NextRequest) {
       try {
         const videoPath = getVideoPath(userId, filename);
 
-        // Step 1: Analyze colors (0-40%)
+        // Step 1: Analyze colors (0-30%)
         progress("analyzing", "Analyzing video colors...", 5);
         const analysis = await analyzeVideoColors(videoPath, start, end);
-        progress("analyzing", "Color analysis complete", 40);
+        progress("analyzing", "Color analysis complete", 30);
 
-        // Step 2: Compute grading params (40-45%)
-        progress("computing", "Computing corrections...", 42);
+        // Step 2: Compute corrections (30-40%)
+        progress("computing", "Computing corrections...", 35);
         const params = computeGradingParams(analysis);
         const corrections = describeCorrections(params);
-        progress("computing", corrections.join(", "), 45);
+        progress("computing", corrections.join(", "), 40);
 
-        // Step 3: Apply grading (45-95%)
-        progress("grading", "Applying color grading...", 50);
+        // Step 3: Apply grading (40-95%)
+        progress("grading", "Applying color corrections...", 45);
         const gradedFilename = await applyColorGrading(
           userId,
           videoPath,

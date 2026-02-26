@@ -23,6 +23,7 @@ export async function GET(request: NextRequest) {
       defaultFormat: true,
       defaultFrame: true,
       autonomousMode: true,
+      defaultMusicVolume: true,
     },
   });
 
@@ -34,6 +35,7 @@ export async function GET(request: NextRequest) {
     defaultFormat: "original",
     defaultFrame: "cinema",
     autonomousMode: false,
+    defaultMusicVolume: 30,
   });
 }
 
@@ -43,7 +45,7 @@ export async function PUT(request: NextRequest) {
   const { userId } = authResult;
 
   const body = await request.json();
-  const data: Record<string, boolean | string> = {};
+  const data: Record<string, boolean | string | number> = {};
 
   if (typeof body.autoPostInstagram === "boolean")
     data.autoPostInstagram = body.autoPostInstagram;
@@ -59,6 +61,8 @@ export async function PUT(request: NextRequest) {
     data.defaultFrame = body.defaultFrame;
   if (typeof body.autonomousMode === "boolean")
     data.autonomousMode = body.autonomousMode;
+  if (typeof body.defaultMusicVolume === "number")
+    data.defaultMusicVolume = body.defaultMusicVolume;
 
   const updated = await prisma.user.update({
     where: { id: userId },
@@ -71,6 +75,7 @@ export async function PUT(request: NextRequest) {
       defaultFormat: true,
       defaultFrame: true,
       autonomousMode: true,
+      defaultMusicVolume: true,
     },
   });
 
